@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="hu">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: http: https:" />
+    <title>Skipy Browser</title>
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <div class="nav-buttons">
+          <button id="back" title="Vissza" aria-label="Vissza"><i data-lucide="arrow-left"></i></button>
+          <button id="forward" title="Előre" aria-label="Előre"><i data-lucide="arrow-right"></i></button>
+          <button id="reload" title="Újratöltés" aria-label="Újratöltés"><i data-lucide="rotate-cw"></i></button>
+          <button id="home" title="Kezdőlap" aria-label="Kezdőlap"><i data-lucide="house"></i></button>
+        </div>
+        <div class="tabs" id="tabs"></div>
+        <div class="library-actions">
+          <button id="show-bass" class="tool-action" title="Bass Booster" aria-label="Bass Booster"><i data-lucide="audio-lines"></i></button>
+          <button id="show-privacy" class="tool-action" title="Adatvédelem" aria-label="Adatvédelem"><i data-lucide="shield"></i></button>
+          <button id="bookmark-toggle" class="tool-action" title="Könyvjelző hozzáadása" aria-label="Könyvjelző hozzáadása"><i data-lucide="bookmark"></i></button>
+          <button id="show-bookmarks" class="tool-action" title="Könyvjelzők" aria-label="Könyvjelzők"><i data-lucide="book-open"></i></button>
+          <button id="show-history" class="tool-action" title="Előzmények" aria-label="Előzmények"><i data-lucide="history"></i></button>
+          <button id="show-downloads" class="tool-action" title="Letöltések" aria-label="Letöltések"><i data-lucide="download"></i></button>
+          <button id="show-settings" class="tool-action" title="Beállítások" aria-label="Beállítások"><i data-lucide="sliders-horizontal"></i></button>
+        </div>
+        <div class="window-controls" aria-label="Ablakvezérlők">
+          <button id="window-minimize" title="Kicsinyítés" aria-label="Kicsinyítés"><i data-lucide="minus"></i></button>
+          <button id="window-maximize" title="Nagyítás" aria-label="Nagyítás"><i data-lucide="square"></i></button>
+          <button id="window-close" class="close-window" title="Bezárás" aria-label="Bezárás"><i data-lucide="x"></i></button>
+        </div>
+      </header>
+      <div class="toolbar">
+        <form id="address-form"><button id="site-security" class="site-mark" type="button" title="Kapcsolat adatai" aria-label="Kapcsolat adatai"><i data-lucide="globe"></i></button><input id="address" aria-label="Címsor" spellcheck="false" placeholder="Keress a weben, vagy írj be egy URL-t…" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="address-suggestions" /><button class="address-submit" type="submit" title="Megnyitás" aria-label="Megnyitás"><i data-lucide="arrow-right"></i></button><div id="address-suggestions" class="suggestions" role="listbox" hidden></div></form>
+        <div id="load-progress" class="load-progress" role="progressbar" aria-label="Oldal betöltése" hidden><div id="load-progress-fill"></div></div>
+      </div>
+      <main id="home-screen" class="home-screen">
+        <div class="home-content">
+          <div class="welcome"><div id="home-time" class="home-time"></div><div id="home-date" class="home-date"></div><h1>Üdvözöl a <span>Skipy Browser</span>-ben</h1></div>
+          <form id="home-search-form" class="home-search"><span aria-hidden="true"><i data-lucide="search"></i></span><input id="home-search" aria-label="Gyors keresés vagy webcím" spellcheck="false" autocomplete="off" placeholder="Gyors keresés vagy URL megadása…" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="home-suggestions" /><button type="submit">Keresés</button><div id="home-suggestions" class="suggestions" role="listbox" hidden></div></form>
+          <section class="shortcuts" aria-label="Gyors elérések"><div class="shortcuts-heading"><span><i data-lucide="grid-2x2"></i></span> GYORS ELÉRÉS</div><div id="quick-links" class="quick-links"></div></section>
+        </div>
+      </main>
+      <aside id="library-panel" class="library-panel" hidden>
+        <div class="panel-heading"><h2 id="panel-title"></h2><button id="panel-close" aria-label="Panel bezárása"><i data-lucide="x"></i></button></div>
+        <div id="panel-actions" class="panel-actions"></div>
+        <div id="panel-list" class="panel-list"></div>
+      </aside>
+      <section id="tool-popover" class="tool-popover" hidden></section>
+      <dialog id="quicklink-dialog" class="quicklink-dialog"><form id="quicklink-form"><h2 id="quicklink-dialog-title"></h2><input id="quicklink-id" type="hidden" /><label>Név<input id="quicklink-title" maxlength="60" required /></label><label>Webcím<input id="quicklink-url" type="url" placeholder="https://pelda.hu/" required /></label><p id="quicklink-error" role="alert"></p><div class="dialog-actions"><button id="quicklink-cancel" type="button">Mégse</button><button type="submit">Mentés</button></div></form></dialog>
+    </div>
+    <script type="module" src="/main.ts"></script>
+  </body>
+</html>

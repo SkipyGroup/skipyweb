@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "None",
+    "moduleResolution": "Node",
+    "lib": ["ES2022", "DOM"],
+    "types": ["node"],
+    "outFile": "dist-main/fingerprint-preload.js",
+    "strict": true,
+    "skipLibCheck": true
+  },
+  "files": ["src/main/fingerprint-page.ts", "src/main/fingerprint-preload.ts"]
+}
