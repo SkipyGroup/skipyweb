@@ -9,10 +9,12 @@ import { clearRequests, flushPrivacy, hostForUrl, isBlocked, isFingerprintEnable
 const TOOLBAR_HEIGHT = 94
 const PANEL_WIDTH = 350
 const HOME_URL = 'skipy://home'
+app.setPath('userData', path.join(app.getPath('appData'), 'skipy-browser'))
 type CertificateState = { status: 'none' | 'loading' | 'secure' | 'error' | 'unavailable'; host?: string; subject?: string; issuer?: string; validFrom?: number; validTo?: number; protocol?: string; cipher?: string; error?: string }
 type Tab = { id: string; view: WebContentsView | null; title: string; url: string; favicon: string | null; loading: boolean; loadEpoch: number; audible: boolean; muted: boolean; bassDb: number; bassStatus: 'off' | 'starting' | 'active' | 'error'; audioView: WebContentsView | null; certificate: CertificateState; certCandidates: Map<string, CertificateState>; certReady: Promise<void> | null; error: string | null; site: string | null; protection: 'active' | 'error' | 'pending' }
 const tabs: Tab[] = []
 let activeId = ''
+let globalBassDb = 0
 let window: BrowserWindow
 let nextId = 1
 let panel: 'bookmarks' | 'history' | 'downloads' | 'settings' | 'privacy' | null = null
@@ -59,6 +61,7 @@ function publicState() {
     panel,
     downloadsOpen,
     toolPopover,
+    globalBassDb,
     certificate: current()?.certificate ?? { status: 'none' },
     sessionDownloadIds: [...sessionDownloadIds],
     library: getLibrary(),
@@ -429,6 +432,12 @@ function setBass(tab: Tab, db: number) {
   publish()
 }
 
+function setGlobalBass(db: number) {
+  globalBassDb = db
+  for (const tab of tabs) setBass(tab, db)
+  publish()
+}
+
 function attachPage(tab: Tab) {
   const view = new WebContentsView({ webPreferences: {
     nodeIntegration: false, contextIsolation: true, sandbox: true,
@@ -510,7 +519,7 @@ function attachPage(tab: Tab) {
 }
 
 function createTab(input = configuredHome()) {
-  const tab: Tab = { id: String(nextId++), view: null, title: 'Új lap', url: input === HOME_URL ? HOME_URL : resolveInput(input), favicon: null, loading: false, loadEpoch: 0, audible: false, muted: false, bassDb: 0, bassStatus: 'off', audioView: null, certificate: certificateForUrl(input === HOME_URL ? HOME_URL : resolveInput(input)), certCandidates: new Map(), certReady: null, error: null, site: input === HOME_URL ? null : siteForUrl(resolveInput(input)), protection: 'pending' }
+  const tab: Tab = { id: String(nextId++), view: null, title: 'Új lap', url: input === HOME_URL ? HOME_URL : resolveInput(input), favicon: null, loading: false, loadEpoch: 0, audible: false, muted: false, bassDb: globalBassDb, bassStatus: 'off', audioView: null, certificate: certificateForUrl(input === HOME_URL ? HOME_URL : resolveInput(input)), certCandidates: new Map(), certReady: null, error: null, site: input === HOME_URL ? null : siteForUrl(resolveInput(input)), protection: 'pending' }
   tabs.push(tab)
   if (input !== HOME_URL) {
     attachPage(tab)
@@ -735,11 +744,8 @@ app.whenReady().then(() => {
       }
     }
     else if (action === 'bass-set') {
-      try {
-        const change = JSON.parse(text) as { tabId: string; db: number }
-        const tab = current()
-        if (tab && change.tabId === tab.id && Number.isInteger(change.db) && change.db >= 0 && change.db <= 12) setBass(tab, change.db)
-      } catch { /* Ignore invalid controls. */ }
+      const db = Number(text)
+      if (text.trim() !== '' && Number.isInteger(db) && db >= 0 && db <= 12) setGlobalBass(db)
     }
     else if (action === 'tool') {
       if (event.sender !== window.webContents) return

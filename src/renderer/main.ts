@@ -18,7 +18,7 @@ type HistoryEntry = { id: string; title: string; url: string; visitedAt: number;
 type DownloadEntry = { id: string; name: string; path: string; url: string; received: number; total: number; status: 'progressing' | 'completed' | 'cancelled' | 'interrupted'; startedAt: number }
 type QuickLink = { id: string; title: string; url: string }
 type Privacy = { site: string; protection: 'active' | 'error' | 'pending'; fingerprintEnabled: boolean; blockedHosts: string[]; rows: { site: string; host: string; count: number; blocked: number; lastSeen: number; blockedNow: boolean }[] }
-type State = { activeId: string; maximized: boolean; fullscreenMode: 'none' | 'app' | 'video'; tabs: Tab[]; panel: 'bookmarks' | 'history' | 'downloads' | 'settings' | 'privacy' | null; downloadsOpen: boolean; sessionDownloadIds: string[]; toolPopover: 'certificate' | 'bass' | null; certificate: CertificateState; privacy: Privacy | null; library: { bookmarks: Bookmark[]; history: HistoryEntry[]; downloads: DownloadEntry[]; quickLinks: QuickLink[]; settings: { searchEngine: 'google' | 'duckduckgo' | 'bing'; homepage: string } } }
+type State = { activeId: string; globalBassDb: number; maximized: boolean; fullscreenMode: 'none' | 'app' | 'video'; tabs: Tab[]; panel: 'bookmarks' | 'history' | 'downloads' | 'settings' | 'privacy' | null; downloadsOpen: boolean; sessionDownloadIds: string[]; toolPopover: 'certificate' | 'bass' | null; certificate: CertificateState; privacy: Privacy | null; library: { bookmarks: Bookmark[]; history: HistoryEntry[]; downloads: DownloadEntry[]; quickLinks: QuickLink[]; settings: { searchEngine: 'google' | 'duckduckgo' | 'bing'; homepage: string } } }
 type BrowserBridge = {
   command: (action: string, value?: string) => Promise<State | string | void>
   onState: (callback: (state: State) => void) => () => void
@@ -38,7 +38,7 @@ if (overlayMode === 'panel' || overlayMode === 'downloads' || overlayMode === 't
 let overlayClosing = false
 let lastOverlayPanel: State['panel'] = null
 const tabElements = new Map<string, HTMLElement>()
-let state: State = { activeId: '', maximized: false, fullscreenMode: 'none', tabs: [], panel: null, downloadsOpen: false, sessionDownloadIds: [], toolPopover: null, certificate: { status: 'none' }, privacy: null, library: { bookmarks: [], history: [], downloads: [], quickLinks: [], settings: { searchEngine: 'google', homepage: 'skipy' } } }
+let state: State = { activeId: '', globalBassDb: 0, maximized: false, fullscreenMode: 'none', tabs: [], panel: null, downloadsOpen: false, sessionDownloadIds: [], toolPopover: null, certificate: { status: 'none' }, privacy: null, library: { bookmarks: [], history: [], downloads: [], quickLinks: [], settings: { searchEngine: 'google', homepage: 'skipy' } } }
 let homeModeDraft: 'skipy' | 'custom' | null = null
 let homepageDraft: string | null = null
 let settingsError = ''
@@ -450,7 +450,7 @@ function renderToolPopover() {
   const root = $('tool-popover')
   root.hidden = !state.toolPopover
   const activeSlider = root.querySelector<HTMLInputElement>('input[type="range"]')
-  if (state.toolPopover === 'bass' && activeSlider && document.activeElement === activeSlider && activeSlider.dataset.tabId === state.activeId) return
+  if (state.toolPopover === 'bass' && activeSlider && document.activeElement === activeSlider) return
   root.replaceChildren()
   if (!state.toolPopover) return
   const header = document.createElement('div')
@@ -491,19 +491,17 @@ function renderToolPopover() {
     const tab = state.tabs.find(item => item.id === state.activeId)
     const description = document.createElement('p')
     description.className = 'bass-description'
-    description.textContent = tab?.bassStatus === 'error' ? 'A hangrögzítés nem sikerült; a normál hang visszaállt.' : tab?.bassStatus === 'starting' ? 'Hangfeldolgozás indítása…' : 'Mélyhangkiemelés az aktív lapon'
+    description.textContent = tab?.bassStatus === 'error' ? 'Egy lap hangfeldolgozása nem sikerült; ott a normál hang visszaállt.' : 'Mélyhangkiemelés a böngésző minden lapján'
     root.append(description)
     const control = document.createElement('label')
     control.className = 'bass-control'
     const label = document.createElement('span')
-    label.textContent = `${tab?.bassDb ?? 0} dB${!tab?.bassDb ? ' · kikapcsolva' : ''}`
+    label.textContent = `${state.globalBassDb} dB${!state.globalBassDb ? ' · kikapcsolva' : ''}`
     const slider = document.createElement('input')
-    slider.type = 'range'; slider.min = '0'; slider.max = '12'; slider.step = '1'; slider.value = String(tab?.bassDb ?? 0)
-    slider.dataset.tabId = tab?.id ?? ''
-    slider.disabled = !tab
+    slider.type = 'range'; slider.min = '0'; slider.max = '12'; slider.step = '1'; slider.value = String(state.globalBassDb)
     slider.setAttribute('aria-label', 'Mélyhangkiemelés')
     slider.addEventListener('input', () => { label.textContent = `${slider.value} dB${slider.value === '0' ? ' · kikapcsolva' : ''}` })
-    slider.addEventListener('change', () => { if (tab) command('bass-set', JSON.stringify({ tabId: tab.id, db: Number(slider.value) })) })
+    slider.addEventListener('change', () => command('bass-set', slider.value))
     slider.addEventListener('blur', () => renderToolPopover())
     control.append(label, slider)
     root.append(control)
@@ -533,7 +531,7 @@ function render(next: State) {
   security.classList.toggle('secure', state.certificate.status === 'secure')
   security.classList.toggle('certificate-error', state.certificate.status === 'error')
   security.title = state.certificate.status === 'secure' ? 'Érvényes HTTPS-kapcsolat · részletek' : state.certificate.status === 'error' ? 'Tanúsítványhiba · részletek' : 'Kapcsolat adatai'
-  $('show-bass').classList.toggle('bass-active', !!active?.bassDb)
+  $('show-bass').classList.toggle('bass-active', state.globalBassDb > 0)
   $('show-bass').classList.toggle('selected', state.toolPopover === 'bass')
   const activeChanged = renderedActiveId !== state.activeId
   renderedActiveId = state.activeId

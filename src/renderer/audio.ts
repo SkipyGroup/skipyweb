@@ -13,6 +13,7 @@ let context: AudioContext | null = null
 let shelf: BiquadFilterNode | null = null
 let output: GainNode | null = null
 let starting = false
+function outputLevel(db: number, muted: boolean) { return muted ? 0 : Math.pow(10, -db * 0.18 / 20) }
 
 async function stop() {
   stream?.getTracks().forEach(track => track.stop())
@@ -38,16 +39,16 @@ window.skipyAudio.onStart(async (db, muted) => {
     context = new AudioContext()
     shelf = context.createBiquadFilter()
     shelf.type = 'lowshelf'
-    shelf.frequency.value = 120
+    shelf.frequency.value = 95
     shelf.gain.value = db
     const compressor = context.createDynamicsCompressor()
-    compressor.threshold.value = -12
-    compressor.knee.value = 12
-    compressor.ratio.value = 4
+    compressor.threshold.value = -3
+    compressor.knee.value = 3
+    compressor.ratio.value = 3
     compressor.attack.value = 0.003
     compressor.release.value = 0.25
     output = context.createGain()
-    output.gain.value = muted ? 0 : 1
+    output.gain.value = outputLevel(db, muted)
     context.createMediaStreamSource(stream).connect(shelf).connect(compressor).connect(output).connect(context.destination)
     await context.resume()
     track.addEventListener('ended', () => { void stop(); window.skipyAudio.status('error', 'A lap hangrögzítése megszakadt.') }, { once: true })
@@ -59,6 +60,6 @@ window.skipyAudio.onStart(async (db, muted) => {
 })
 window.skipyAudio.onUpdate((db, muted) => {
   if (shelf && context) shelf.gain.setTargetAtTime(db, context.currentTime, 0.035)
-  if (output && context) output.gain.setTargetAtTime(muted ? 0 : 1, context.currentTime, 0.01)
+  if (output && context) output.gain.setTargetAtTime(outputLevel(db, muted), context.currentTime, 0.01)
 })
 window.skipyAudio.onStop(() => { void stop() })

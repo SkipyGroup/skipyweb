@@ -3,14 +3,36 @@
   "version": "0.1.0",
   "private": true,
   "description": "A small Windows desktop browser",
+  "productName": "Skipy Browser",
   "main": "dist-main/main.js",
   "scripts": {
     "build": "tsc -p tsconfig.main.json && tsc -p tsconfig.preload.json && vite build src/renderer --config vite.config.ts --outDir ../../dist --emptyOutDir --base ./",
     "start": "npm run build && electron .",
+    "dist:win": "tsc -p tsconfig.main.json && tsc -p tsconfig.preload.json && vite build src/renderer --config vite.config.ts --outDir ../../dist --emptyOutDir --base ./ && electron-builder --win nsis --x64",
     "check": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.preload.json --noEmit && tsc -p tsconfig.renderer.json --noEmit"
+  },
+  "build": {
+    "appId": "com.skipy.browser",
+    "productName": "Skipy Browser",
+    "asar": true,
+    "directories": { "output": "release" },
+    "files": ["dist/**", "dist-main/**", "package.json"],
+    "win": {
+      "target": "nsis",
+      "icon": "assets/skipy.ico",
+      "artifactName": "Skipy-Browser-Setup-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
   },
   "devDependencies": {
     "electron": "^44.4.3",
+    "electron-builder": "^26.15.3",
     "typescript": "^5.9.2",
     "vite": "^7.1.0"
   },
