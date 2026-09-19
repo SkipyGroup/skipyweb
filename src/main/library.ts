@@ -11,6 +11,8 @@ export type Library = { bookmarks: Bookmark[]; history: HistoryEntry[]; download
 
 let library: Library = { bookmarks: [], history: [], downloads: [], quickLinks: [], settings: { searchEngine: 'google', homepage: 'skipy' } }
 let filePath = ''
+let saveTimer: ReturnType<typeof setTimeout> | null = null
+let writeChain: Promise<void> = Promise.resolve()
 
 export function getLibrary(): Library { return library }
 
@@ -62,9 +64,19 @@ function validDownload(value: unknown): value is DownloadEntry {
 
 export function saveLibrary() {
   if (!filePath) return
+  if (!saveTimer) saveTimer = setTimeout(() => { saveTimer = null; void flushLibrary().catch(() => undefined) }, 180)
+}
+
+export function flushLibrary(): Promise<void> {
+  if (!filePath) return writeChain
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null }
+  const snapshot = JSON.stringify(library, null, 2)
   const temporary = `${filePath}.tmp`
-  fs.writeFileSync(temporary, JSON.stringify(library, null, 2), 'utf8')
-  fs.renameSync(temporary, filePath)
+  writeChain = writeChain.catch(() => undefined).then(async () => {
+    await fs.promises.writeFile(temporary, snapshot, 'utf8')
+    await fs.promises.rename(temporary, filePath)
+  })
+  return writeChain
 }
 
 export function id() { return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}` }

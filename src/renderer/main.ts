@@ -9,16 +9,16 @@ function icon(name: string) {
   element.setAttribute('data-lucide', name)
   return element
 }
-function setIcon(element: HTMLElement, name: string) { element.replaceChildren(icon(name)) }
+function setIcon(element: HTMLElement, name: string) { if (element.dataset.iconName !== name) { element.dataset.iconName = name; element.replaceChildren(icon(name)) } }
 
-type Tab = { id: string; title: string; url: string; favicon: string | null; loading: boolean; loadEpoch: number; audible: boolean; muted: boolean; bassDb: number; bassStatus: 'off' | 'starting' | 'active' | 'error'; error: string | null; canGoBack: boolean; canGoForward: boolean }
+type Tab = { id: string; title: string; url: string; favicon: string | null; loading: boolean; loadEpoch: number; audible: boolean; muted: boolean; bassDb: number; bassStatus: 'off' | 'starting' | 'active' | 'error'; error: string | null; canGoBack: boolean; canGoForward: boolean; closing: boolean }
 type CertificateState = { status: 'none' | 'loading' | 'secure' | 'error' | 'unavailable'; host?: string; subject?: string; issuer?: string; validFrom?: number; validTo?: number; protocol?: string; cipher?: string; error?: string }
 type Bookmark = { id: string; title: string; url: string; createdAt: number; favicon?: string }
 type HistoryEntry = { id: string; title: string; url: string; visitedAt: number; favicon?: string }
 type DownloadEntry = { id: string; name: string; path: string; url: string; received: number; total: number; status: 'progressing' | 'completed' | 'cancelled' | 'interrupted'; startedAt: number }
 type QuickLink = { id: string; title: string; url: string }
 type Privacy = { site: string; protection: 'active' | 'error' | 'pending'; fingerprintEnabled: boolean; blockedHosts: string[]; rows: { site: string; host: string; count: number; blocked: number; lastSeen: number; blockedNow: boolean }[] }
-type State = { activeId: string; globalBassDb: number; maximized: boolean; fullscreenMode: 'none' | 'app' | 'video'; tabs: Tab[]; panel: 'bookmarks' | 'history' | 'downloads' | 'settings' | 'privacy' | null; downloadsOpen: boolean; sessionDownloadIds: string[]; toolPopover: 'certificate' | 'bass' | null; certificate: CertificateState; privacy: Privacy | null; library: { bookmarks: Bookmark[]; history: HistoryEntry[]; downloads: DownloadEntry[]; quickLinks: QuickLink[]; settings: { searchEngine: 'google' | 'duckduckgo' | 'bing'; homepage: string } } }
+type State = { activeId: string; globalBassDb: number; globalBassFrequency: number; maximized: boolean; fullscreenMode: 'none' | 'app' | 'video'; tabs: Tab[]; panel: 'bookmarks' | 'history' | 'downloads' | 'settings' | 'privacy' | null; downloadsOpen: boolean; sessionDownloadIds: string[]; pendingDownload: { id: string; filename: string; host: string; total: number } | null; toolPopover: 'certificate' | 'bass' | null; certificate: CertificateState; privacy: Privacy | null; library: { bookmarks: Bookmark[]; history: HistoryEntry[]; downloads: DownloadEntry[]; quickLinks: QuickLink[]; settings: { searchEngine: 'google' | 'duckduckgo' | 'bing'; homepage: string } } }
 type BrowserBridge = {
   command: (action: string, value?: string) => Promise<State | string | void>
   onState: (callback: (state: State) => void) => () => void
@@ -34,11 +34,11 @@ const address = $('address') as HTMLInputElement
 const homeSearch = $('home-search') as HTMLInputElement
 const home = $('home-screen')
 const overlayMode = new URLSearchParams(location.search).get('overlay')
-if (overlayMode === 'panel' || overlayMode === 'downloads' || overlayMode === 'tool') document.body.classList.add(`overlay-${overlayMode}`)
+if (overlayMode === 'panel' || overlayMode === 'downloads' || overlayMode === 'tool' || overlayMode === 'download-confirm') document.body.classList.add(`overlay-${overlayMode}`)
 let overlayClosing = false
 let lastOverlayPanel: State['panel'] = null
 const tabElements = new Map<string, HTMLElement>()
-let state: State = { activeId: '', globalBassDb: 0, maximized: false, fullscreenMode: 'none', tabs: [], panel: null, downloadsOpen: false, sessionDownloadIds: [], toolPopover: null, certificate: { status: 'none' }, privacy: null, library: { bookmarks: [], history: [], downloads: [], quickLinks: [], settings: { searchEngine: 'google', homepage: 'skipy' } } }
+let state: State = { activeId: '', globalBassDb: 0, globalBassFrequency: 95, maximized: false, fullscreenMode: 'none', tabs: [], panel: null, downloadsOpen: false, sessionDownloadIds: [], pendingDownload: null, toolPopover: null, certificate: { status: 'none' }, privacy: null, library: { bookmarks: [], history: [], downloads: [], quickLinks: [], settings: { searchEngine: 'google', homepage: 'skipy' } } }
 let homeModeDraft: 'skipy' | 'custom' | null = null
 let homepageDraft: string | null = null
 let settingsError = ''
@@ -184,10 +184,11 @@ function updateDownloadsButton() {
 function updateClock() {
   const now = new Date()
   $('home-time').textContent = new Intl.DateTimeFormat('hu-HU', { hour: '2-digit', minute: '2-digit' }).format(now)
-  $('home-date').textContent = new Intl.DateTimeFormat('hu-HU', { month: 'long', day: 'numeric', weekday: 'long' }).format(now).toLocaleUpperCase('hu-HU')
+  $('home-date').textContent = new Intl.DateTimeFormat('hu-HU', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' }).format(now).toLocaleUpperCase('hu-HU')
+  $('home-greeting').textContent = now.getHours() < 10 ? 'Jó reggelt!' : now.getHours() < 18 ? 'Jó napot!' : 'Jó estét!'
 }
 updateClock()
-setInterval(updateClock, 1000)
+setTimeout(function minuteTick() { updateClock(); setTimeout(minuteTick, 60000 - Date.now() % 60000 + 20) }, 60000 - Date.now() % 60000 + 20)
 
 function editQuickLink(link?: QuickLink) {
   const dialog = $('quicklink-dialog') as HTMLDialogElement
@@ -204,6 +205,9 @@ function editQuickLink(link?: QuickLink) {
 
 function renderQuickLinks() {
   const grid = $('quick-links')
+  const signature = JSON.stringify(state.library.quickLinks)
+  if (grid.dataset.signature === signature) return
+  grid.dataset.signature = signature
   grid.replaceChildren()
   for (const link of state.library.quickLinks) {
     const card = document.createElement('div')
@@ -493,22 +497,59 @@ function renderToolPopover() {
     description.className = 'bass-description'
     description.textContent = tab?.bassStatus === 'error' ? 'Egy lap hangfeldolgozása nem sikerült; ott a normál hang visszaállt.' : 'Mélyhangkiemelés a böngésző minden lapján'
     root.append(description)
+    const presets = document.createElement('div')
+    presets.className = 'bass-presets'
+    const presetValues = [{ name: 'Tiszta', db: 4, frequency: 80 }, { name: 'Mély', db: 7, frequency: 95 }, { name: 'Erős', db: 10, frequency: 120 }]
+    const selectedPreset = presetValues.find(preset => preset.db === state.globalBassDb && preset.frequency === state.globalBassFrequency)?.name ?? 'Egyéni'
+    for (const preset of presetValues) {
+      const button = document.createElement('button')
+      button.type = 'button'; button.textContent = preset.name
+      button.className = preset.name === selectedPreset ? 'selected' : ''
+      button.addEventListener('click', () => command('bass-set', JSON.stringify({ db: preset.db, frequency: preset.frequency })))
+      presets.append(button)
+    }
+    const custom = document.createElement('button')
+    custom.type = 'button'; custom.textContent = 'Egyéni'; custom.disabled = true
+    custom.className = selectedPreset === 'Egyéni' ? 'selected' : ''
+    presets.append(custom)
+    root.append(presets)
     const control = document.createElement('label')
     control.className = 'bass-control'
     const label = document.createElement('span')
-    label.textContent = `${state.globalBassDb} dB${!state.globalBassDb ? ' · kikapcsolva' : ''}`
+    label.textContent = `Erősség · ${state.globalBassDb} dB${!state.globalBassDb ? ' · kikapcsolva' : ` · ${selectedPreset}`}`
     const slider = document.createElement('input')
     slider.type = 'range'; slider.min = '0'; slider.max = '12'; slider.step = '1'; slider.value = String(state.globalBassDb)
     slider.setAttribute('aria-label', 'Mélyhangkiemelés')
     slider.addEventListener('input', () => { label.textContent = `${slider.value} dB${slider.value === '0' ? ' · kikapcsolva' : ''}` })
-    slider.addEventListener('change', () => command('bass-set', slider.value))
+    slider.addEventListener('change', () => command('bass-set', JSON.stringify({ db: Number(slider.value), frequency: state.globalBassFrequency })))
     slider.addEventListener('blur', () => renderToolPopover())
     control.append(label, slider)
-    root.append(control)
+    const frequencyControl = document.createElement('label')
+    frequencyControl.className = 'bass-control'
+    const frequencyLabel = document.createElement('span')
+    frequencyLabel.textContent = `Basszusfrekvencia · ${state.globalBassFrequency} Hz`
+    const frequencySlider = document.createElement('input')
+    frequencySlider.type = 'range'; frequencySlider.min = '60'; frequencySlider.max = '160'; frequencySlider.step = '5'; frequencySlider.value = String(state.globalBassFrequency)
+    frequencySlider.setAttribute('aria-label', 'Basszusfrekvencia')
+    frequencySlider.addEventListener('input', () => { frequencyLabel.textContent = `Basszusfrekvencia · ${frequencySlider.value} Hz` })
+    frequencySlider.addEventListener('change', () => command('bass-set', JSON.stringify({ db: state.globalBassDb, frequency: Number(frequencySlider.value) })))
+    frequencyControl.append(frequencyLabel, frequencySlider)
+    root.append(control, frequencyControl)
   }
 }
 
 function formatBytes(bytes: number) { return bytes < 1024 ? `${bytes} B` : bytes < 1048576 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1048576).toFixed(1)} MB` }
+
+function renderDownloadConfirmation() {
+  const pending = state.pendingDownload
+  const root = $('download-confirm')
+  root.hidden = !pending
+  if (!pending) return
+  $('download-confirm-name').textContent = pending.filename
+  $('download-confirm-meta').textContent = `${pending.host} · ${pending.total > 0 ? formatBytes(pending.total) : 'ismeretlen méret'}`
+  ;($('download-confirm-accept') as HTMLButtonElement).dataset.id = pending.id
+  ;($('download-confirm-cancel') as HTMLButtonElement).dataset.id = pending.id
+}
 
 function render(next: State) {
   if (overlayMode === 'downloads') {
@@ -518,6 +559,7 @@ function render(next: State) {
   else state = next
   if (overlayMode === 'panel' && next.panel) { lastOverlayPanel = next.panel; overlayClosing = false; document.body.classList.remove('overlay-closing') }
   if (overlayMode === 'tool') { renderToolPopover(); renderIcons(); return }
+  if (overlayMode === 'download-confirm') { renderDownloadConfirmation(); renderIcons(); return }
   if (overlayMode) { renderPanel(); renderIcons(); return }
   document.body.classList.toggle('fullscreen', state.fullscreenMode !== 'none')
   $('window-maximize').classList.toggle('restored', state.maximized)
@@ -535,10 +577,41 @@ function render(next: State) {
   $('show-bass').classList.toggle('selected', state.toolPopover === 'bass')
   const activeChanged = renderedActiveId !== state.activeId
   renderedActiveId = state.activeId
+  const previousTabPositions = new Map<string, DOMRect>()
+  for (const [id, element] of tabElements) previousTabPositions.set(id, element.getBoundingClientRect())
   for (const [index, tab] of state.tabs.entries()) {
     let item = tabElements.get(tab.id)
-    if (!item) { item = document.createElement('div'); item.addEventListener('click', () => command('select', tab.id)); tabElements.set(tab.id, item) }
-    item.className = `tab${tab.id === state.activeId ? ' active' : ''}${tab.loading ? ' loading' : ''}`
+    const isNew = !item
+    if (!item) {
+      item = document.createElement('div')
+      item.dataset.entering = 'true'
+      item.addEventListener('click', () => command('select', tab.id))
+      item.addEventListener('auxclick', event => {
+        if (event.button !== 1) return
+        event.preventDefault()
+        event.stopPropagation()
+        command('close', tab.id)
+      })
+      item.addEventListener('animationend', event => {
+        if (event.animationName !== 'tab-enter') return
+        if (item) { delete item.dataset.entering; item.classList.remove('entering') }
+      })
+      tabElements.set(tab.id, item)
+    }
+    item.className = `tab${tab.id === state.activeId ? ' active' : ''}${tab.loading ? ' loading' : ''}${tab.closing ? ' closing' : ''}${item.dataset.entering === 'true' ? ' entering' : ''}`
+    item.setAttribute('aria-disabled', String(tab.closing))
+    if (tab.closing && item.dataset.closeAcknowledged !== 'true') {
+      item.dataset.closeAcknowledged = 'true'
+      if (matchMedia('(prefers-reduced-motion: reduce)').matches) command('finish-close', tab.id)
+      else {
+        const finish = (event: AnimationEvent) => {
+          if (event.animationName !== 'tab-close') return
+          item?.removeEventListener('animationend', finish)
+          command('finish-close', tab.id)
+        }
+        item.addEventListener('animationend', finish)
+      }
+    }
     const previousIcon = item.querySelector<HTMLElement>('.favicon-wrap')
     let tabIcon = previousIcon
     const fallbackIcon = tab.url === 'skipy://home' ? 'house' : 'globe'
@@ -576,8 +649,16 @@ function render(next: State) {
     close.title = 'Lap bezárása'
     close.setAttribute('aria-label', `${tab.title} bezárása`)
     if (tabsElement.children[index] !== item) tabsElement.insertBefore(item, tabsElement.children[index] ?? null)
+    if (isNew && matchMedia('(prefers-reduced-motion: reduce)').matches) { delete item.dataset.entering; item.classList.remove('entering') }
   }
   for (const [id, item] of tabElements) if (!state.tabs.some(tab => tab.id === id)) { item.remove(); tabElements.delete(id) }
+  if (!matchMedia('(prefers-reduced-motion: reduce)').matches) for (const [id, item] of tabElements) {
+    const before = previousTabPositions.get(id)
+    if (!before || item.classList.contains('closing')) continue
+    const after = item.getBoundingClientRect()
+    const dx = before.left - after.left
+    if (Math.abs(dx) > 0.5) item.animate([{ transform: `translateX(${dx}px)` }, { transform: 'translateX(0)' }], { duration: 220, easing: 'cubic-bezier(.22,1,.36,1)' })
+  }
   let add = tabsElement.querySelector<HTMLButtonElement>('.new-tab')
   if (!add) {
     add = document.createElement('button')
@@ -604,7 +685,6 @@ function render(next: State) {
   $('bookmark-toggle').title = bookmarked ? 'Könyvjelző eltávolítása' : 'Könyvjelző hozzáadása'
   home.hidden = active?.url !== 'skipy://home'
   renderQuickLinks()
-  renderPanel()
   updateDownloadsButton()
   if (suggestionState.has(address)) showSuggestions(address)
   if (suggestionState.has(homeSearch)) showSuggestions(homeSearch)
@@ -647,6 +727,15 @@ window.addEventListener('resize', updateDownloadsButton)
 $('window-minimize').addEventListener('click', () => command('window-minimize'))
 $('window-maximize').addEventListener('click', () => command('window-maximize'))
 $('window-close').addEventListener('click', () => command('window-close'))
+$('download-confirm-accept').addEventListener('click', event => command('download-confirm', (event.currentTarget as HTMLButtonElement).dataset.id))
+$('download-confirm-cancel').addEventListener('click', event => command('download-reject', (event.currentTarget as HTMLButtonElement).dataset.id))
+window.addEventListener('keydown', event => {
+  if (overlayMode === 'download-confirm' && event.key === 'Escape' && state.pendingDownload) command('download-reject', state.pendingDownload.id)
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+    event.preventDefault()
+    if (!home.hidden) { homeSearch.focus(); homeSearch.select() } else focusAddress()
+  }
+})
 $('home-search-form').addEventListener('submit', event => {
   event.preventDefault()
   closeSuggestions(homeSearch)

@@ -2,30 +2,16 @@ Add-Type -AssemblyName System.Drawing
 $output = Join-Path $PSScriptRoot '..\assets'
 New-Item -ItemType Directory -Path $output -Force | Out-Null
 
+$sourcePath = Join-Path $output 'skipy-logo-source.png'
+if (-not (Test-Path -LiteralPath $sourcePath)) { throw "Missing logo source: $sourcePath" }
+$source = [System.Drawing.Image]::FromFile($sourcePath)
 $bitmap = [System.Drawing.Bitmap]::new(256, 256)
 $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-$graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+$graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+$graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+$graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
 $graphics.Clear([System.Drawing.Color]::Transparent)
-$background = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(255, 26, 23, 24))
-$accent = [System.Drawing.Pen]::new([System.Drawing.Color]::FromArgb(255, 255, 113, 18), 11)
-$bolt = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(255, 255, 126, 29))
-$edge = [System.Drawing.Drawing2D.GraphicsPath]::new()
-$edge.AddArc(15, 15, 56, 56, 180, 90)
-$edge.AddArc(185, 15, 56, 56, 270, 90)
-$edge.AddArc(185, 185, 56, 56, 0, 90)
-$edge.AddArc(15, 185, 56, 56, 90, 90)
-$edge.CloseFigure()
-$graphics.FillPath($background, $edge)
-$graphics.DrawPath($accent, $edge)
-$points = [System.Drawing.Point[]]@(
-  [System.Drawing.Point]::new(142, 40),
-  [System.Drawing.Point]::new(76, 136),
-  [System.Drawing.Point]::new(122, 136),
-  [System.Drawing.Point]::new(106, 216),
-  [System.Drawing.Point]::new(183, 113),
-  [System.Drawing.Point]::new(136, 113)
-)
-$graphics.FillPolygon($bolt, $points)
+$graphics.DrawImage($source, [System.Drawing.Rectangle]::new(0, 0, 256, 256))
 
 $stream = [System.IO.MemoryStream]::new()
 $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
@@ -49,9 +35,6 @@ $writer.Write($png)
 $writer.Dispose()
 $ico.Dispose()
 $stream.Dispose()
-$edge.Dispose()
-$bolt.Dispose()
-$accent.Dispose()
-$background.Dispose()
 $graphics.Dispose()
 $bitmap.Dispose()
+$source.Dispose()

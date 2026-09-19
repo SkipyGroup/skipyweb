@@ -1,11 +1,11 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
 contextBridge.exposeInMainWorld('skipyAudio', {
-  onStart: (callback: (db: number, muted: boolean) => void) => {
-    ipcRenderer.on('audio:start', (_event, db: number, muted: boolean) => callback(db, muted))
+  onStart: (callback: (db: number, frequency: number, muted: boolean) => void) => {
+    ipcRenderer.on('audio:start', (_event, db: number, frequency: number, muted: boolean) => callback(db, frequency, muted))
   },
-  onUpdate: (callback: (db: number, muted: boolean) => void) => {
-    ipcRenderer.on('audio:update', (_event, db: number, muted: boolean) => callback(db, muted))
+  onUpdate: (callback: (db: number, frequency: number, muted: boolean) => void) => {
+    ipcRenderer.on('audio:update', (_event, db: number, frequency: number, muted: boolean) => callback(db, frequency, muted))
   },
   onStop: (callback: () => void) => {
     ipcRenderer.on('audio:stop', callback)

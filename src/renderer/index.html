@@ -36,11 +36,15 @@
         <div id="load-progress" class="load-progress" role="progressbar" aria-label="Oldal betöltése" hidden><div id="load-progress-fill"></div></div>
       </div>
       <main id="home-screen" class="home-screen">
+        <div class="home-brand" aria-label="Skipy Browser"><img src="./skipy-logo.png" alt="" /><strong>SKIPY <span>BROWSER</span></strong></div>
+        <div class="home-corner-actions" aria-hidden="true"><span class="home-status-dot"></span><span>PRIVÁT BÖNGÉSZÉS</span><i data-lucide="grid-2x2"></i></div>
         <div class="home-content">
-          <div class="welcome"><div id="home-time" class="home-time"></div><div id="home-date" class="home-date"></div><h1>Üdvözöl a <span>Skipy Browser</span>-ben</h1></div>
-          <form id="home-search-form" class="home-search"><span aria-hidden="true"><i data-lucide="search"></i></span><input id="home-search" aria-label="Gyors keresés vagy webcím" spellcheck="false" autocomplete="off" placeholder="Gyors keresés vagy URL megadása…" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="home-suggestions" /><button type="submit">Keresés</button><div id="home-suggestions" class="suggestions" role="listbox" hidden></div></form>
-          <section class="shortcuts" aria-label="Gyors elérések"><div class="shortcuts-heading"><span><i data-lucide="grid-2x2"></i></span> GYORS ELÉRÉS</div><div id="quick-links" class="quick-links"></div></section>
+          <div class="welcome"><div id="home-time" class="home-time"></div><div id="home-date" class="home-date"></div><div class="greeting-rule"></div><h1 id="home-greeting">Jó napot!</h1></div>
+          <form id="home-search-form" class="home-search"><span aria-hidden="true"><i data-lucide="search"></i></span><input id="home-search" aria-label="Gyors keresés vagy webcím" spellcheck="false" autocomplete="off" placeholder="Keress az interneten vagy írj be egy URL-t…" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="home-suggestions" /><button type="submit" title="Keresés"><i data-lucide="arrow-right"></i></button><kbd>Ctrl + K</kbd><div id="home-suggestions" class="suggestions" role="listbox" hidden></div></form>
+          <section class="shortcuts" aria-label="Gyors elérések"><div id="quick-links" class="quick-links"></div></section>
         </div>
+        <div class="home-quote"><strong>„Nagy ötletek</strong><span>jobb böngészéssel kezdődnek.”</span></div>
+        <div class="home-tagline"><b></b> FASTER&nbsp; · &nbsp;SIMPLER&nbsp; · &nbsp;YOURS</div>
       </main>
       <aside id="library-panel" class="library-panel" hidden>
         <div class="panel-heading"><h2 id="panel-title"></h2><button id="panel-close" aria-label="Panel bezárása"><i data-lucide="x"></i></button></div>
@@ -48,6 +52,7 @@
         <div id="panel-list" class="panel-list"></div>
       </aside>
       <section id="tool-popover" class="tool-popover" hidden></section>
+      <section id="download-confirm" class="download-confirm" hidden><div class="download-confirm-card"><div class="download-confirm-icon"><i data-lucide="download"></i></div><div><h2>Letöltöd ezt a fájlt?</h2><strong id="download-confirm-name"></strong><p id="download-confirm-meta"></p></div><div class="download-confirm-actions"><button id="download-confirm-cancel" type="button">Mégse</button><button id="download-confirm-accept" type="button">Letöltés</button></div></div></section>
       <dialog id="quicklink-dialog" class="quicklink-dialog"><form id="quicklink-form"><h2 id="quicklink-dialog-title"></h2><input id="quicklink-id" type="hidden" /><label>Név<input id="quicklink-title" maxlength="60" required /></label><label>Webcím<input id="quicklink-url" type="url" placeholder="https://pelda.hu/" required /></label><p id="quicklink-error" role="alert"></p><div class="dialog-actions"><button id="quicklink-cancel" type="button">Mégse</button><button type="submit">Mentés</button></div></form></dialog>
     </div>
     <script type="module" src="/main.ts"></script>

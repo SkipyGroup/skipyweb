@@ -1,27 +1,45 @@
-import { app, BrowserWindow, ipcMain, session, shell, WebContentsView } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, net, session, shell, WebContentsView, type MenuItemConstructorOptions } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
 import { createHmac } from 'node:crypto'
 import { resolveInput as resolveAddress } from './input'
-import { getLibrary, id, loadLibrary, saveLibrary, validFavicon, type DownloadEntry } from './library'
+import { flushLibrary, getLibrary, id, loadLibrary, saveLibrary, validFavicon, type DownloadEntry } from './library'
 import { clearRequests, flushPrivacy, hostForUrl, isBlocked, isFingerprintEnabled, loadPrivacy, recordRequest, requestSummary, secret, setFingerprintEnabled, siteForUrl, toggleBlock } from './privacy'
 
 const TOOLBAR_HEIGHT = 94
 const PANEL_WIDTH = 350
 const HOME_URL = 'skipy://home'
-app.setPath('userData', path.join(app.getPath('appData'), 'skipy-browser'))
+const userDataPath = path.join(app.getPath('appData'), 'skipy-browser')
+const localDataRoot = process.env.LOCALAPPDATA || path.resolve(app.getPath('appData'), '..', 'Local')
+let sessionDataPath = path.join(localDataRoot, 'skipy-browser', 'session')
+try { fs.mkdirSync(sessionDataPath, { recursive: true }) }
+catch {
+  sessionDataPath = path.join(app.getPath('temp'), 'skipy-browser-session')
+  fs.mkdirSync(sessionDataPath, { recursive: true })
+}
+app.setPath('userData', userDataPath)
+app.setPath('sessionData', sessionDataPath)
+app.commandLine.appendSwitch('disk-cache-dir', path.join(sessionDataPath, 'Cache'))
+const hasSingleInstanceLock = app.requestSingleInstanceLock()
+if (!hasSingleInstanceLock) app.quit()
 type CertificateState = { status: 'none' | 'loading' | 'secure' | 'error' | 'unavailable'; host?: string; subject?: string; issuer?: string; validFrom?: number; validTo?: number; protocol?: string; cipher?: string; error?: string }
-type Tab = { id: string; view: WebContentsView | null; title: string; url: string; favicon: string | null; loading: boolean; loadEpoch: number; audible: boolean; muted: boolean; bassDb: number; bassStatus: 'off' | 'starting' | 'active' | 'error'; audioView: WebContentsView | null; certificate: CertificateState; certCandidates: Map<string, CertificateState>; certReady: Promise<void> | null; error: string | null; site: string | null; protection: 'active' | 'error' | 'pending' }
+type Tab = { id: string; view: WebContentsView | null; title: string; url: string; favicon: string | null; loading: boolean; loadEpoch: number; audible: boolean; muted: boolean; bassDb: number; bassStatus: 'off' | 'starting' | 'active' | 'error'; audioView: WebContentsView | null; certificate: CertificateState; certCandidates: Map<string, CertificateState>; certReady: Promise<void> | null; error: string | null; site: string | null; protection: 'active' | 'error' | 'pending'; closing: boolean }
 const tabs: Tab[] = []
+const closeTimers = new Map<string, ReturnType<typeof setTimeout>>()
 let activeId = ''
 let globalBassDb = 0
+let globalBassFrequency = 95
 let window: BrowserWindow
 let nextId = 1
 let panel: 'bookmarks' | 'history' | 'downloads' | 'settings' | 'privacy' | null = null
 let panelView: WebContentsView | null = null
 let downloadsView: WebContentsView | null = null
+let downloadConfirmView: WebContentsView | null = null
+let jsDialogView: WebContentsView | null = null
 let panelAttached = false
 let downloadsAttached = false
+let downloadConfirmAttached = false
+let jsDialogAttached = false
 let panelRemoveTimer: ReturnType<typeof setTimeout> | null = null
 let popupTimer: ReturnType<typeof setTimeout> | null = null
 let downloadsOpen = false
@@ -47,10 +65,17 @@ let noticeTimer: ReturnType<typeof setTimeout> | null = null
 let activeNoticeMessage = ''
 const noticeQueue: { message: string; kind: 'success' | 'error' }[] = []
 const runningDownloads = new Map<string, Electron.DownloadItem>()
-let publishTimer: ReturnType<typeof setTimeout> | null = null
+type PendingDownload = { id: string; item: Electron.DownloadItem; contents: Electron.WebContents | null; filename: string; host: string; total: number; start: { x: number; y: number } }
+const pendingDownloads: PendingDownload[] = []
+type JsDialog = { id: string; tabId: string; type: 'alert' | 'confirm' | 'prompt' | 'beforeunload'; message: string; defaultPrompt: string; host: string }
+let pendingJsDialog: JsDialog | null = null
+const lastViewBounds = new WeakMap<WebContentsView, Electron.Rectangle>()
+let networkPublishTimer: ReturnType<typeof setTimeout> | null = null
+let framePublishTimer: ReturnType<typeof setTimeout> | null = null
+const publishedState = new Map<number, string>()
 
 function publishSoon() {
-  if (!publishTimer) publishTimer = setTimeout(() => { publishTimer = null; publish() }, 150)
+  if (!networkPublishTimer) networkPublishTimer = setTimeout(() => { networkPublishTimer = null; publish() }, 150)
 }
 
 function publicState() {
@@ -62,12 +87,15 @@ function publicState() {
     downloadsOpen,
     toolPopover,
     globalBassDb,
+    globalBassFrequency,
     certificate: current()?.certificate ?? { status: 'none' },
     sessionDownloadIds: [...sessionDownloadIds],
+    pendingDownload: pendingDownloads[0] ? { id: pendingDownloads[0].id, filename: pendingDownloads[0].filename, host: pendingDownloads[0].host, total: pendingDownloads[0].total } : null,
+    jsDialog: pendingJsDialog,
     library: getLibrary(),
-    privacy: current()?.site ? { ...requestSummary(current()!.site!), protection: current()!.protection } : null,
-    tabs: tabs.map(({ id, title, url, favicon, loading, loadEpoch, audible, muted, bassDb, bassStatus, error, view }) => ({
-      id, title, url, favicon, loading, loadEpoch, audible, muted, bassDb, bassStatus, error,
+    privacy: null,
+    tabs: tabs.map(({ id, title, url, favicon, loading, loadEpoch, audible, muted, bassDb, bassStatus, error, closing, view }) => ({
+      id, title, url, favicon, loading, loadEpoch, audible, muted, bassDb, bassStatus, error, closing,
       canGoBack: view?.webContents.navigationHistory.canGoBack() ?? false,
       canGoForward: view?.webContents.navigationHistory.canGoForward() ?? false,
     })),
@@ -75,10 +103,34 @@ function publicState() {
 }
 
 function publish() {
-  if (!window || window.isDestroyed()) return
+  if (!framePublishTimer) framePublishTimer = setTimeout(() => { framePublishTimer = null; publishNow() }, 16)
+}
+
+function stateFor(contents: Electron.WebContents) {
   const state = publicState()
-  window.webContents.send('browser:state', state)
-  for (const view of [panelView, downloadsView, toolView]) if (view && !view.webContents.isDestroyed()) view.webContents.send('browser:state', state)
+  const library = getLibrary()
+  if (contents === window.webContents) return { ...state, privacy: null, library: { bookmarks: library.bookmarks, history: library.history.slice(0, 100), downloads: library.downloads.filter(entry => sessionDownloadIds.has(entry.id)), quickLinks: library.quickLinks, settings: library.settings } }
+  if (contents === panelView?.webContents) return { ...state, library: { bookmarks: panel === 'bookmarks' ? library.bookmarks : [], history: panel === 'history' ? library.history : [], downloads: [], quickLinks: [], settings: library.settings }, privacy: panel === 'privacy' && current()?.site ? { ...requestSummary(current()!.site!), protection: current()!.protection } : null }
+  if (contents === downloadsView?.webContents) return { ...state, library: { bookmarks: [], history: [], downloads: library.downloads.filter(entry => sessionDownloadIds.has(entry.id)), quickLinks: [], settings: library.settings }, privacy: null }
+  if (contents === toolView?.webContents) return { ...state, library: { bookmarks: [], history: [], downloads: [], quickLinks: [], settings: library.settings }, privacy: null }
+  if (contents === downloadConfirmView?.webContents) return { ...state, tabs: [], library: { bookmarks: [], history: [], downloads: [], quickLinks: [], settings: library.settings }, privacy: null }
+  if (contents === jsDialogView?.webContents) return { ...state, tabs: [], library: { bookmarks: [], history: [], downloads: [], quickLinks: [], settings: library.settings }, privacy: null }
+  return state
+}
+
+function sendState(contents: Electron.WebContents) {
+  if (contents.isDestroyed()) return
+  const state = stateFor(contents)
+  const signature = JSON.stringify(state)
+  if (publishedState.get(contents.id) === signature) return
+  publishedState.set(contents.id, signature)
+  contents.send('browser:state', state)
+}
+
+function publishNow() {
+  if (!window || window.isDestroyed()) return
+  sendState(window.webContents)
+  for (const view of [panelView, downloadsView, toolView, downloadConfirmView, jsDialogView]) if (view) sendState(view.webContents)
 }
 
 function current() { return tabs.find(tab => tab.id === activeId) }
@@ -86,6 +138,27 @@ function current() { return tabs.find(tab => tab.id === activeId) }
 function escapeHtml(value: string) { return value.replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!) }
 function dataPage(body: string, css: string) {
   return `data:text/html;charset=UTF-8,${encodeURIComponent(`<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><style>${css}</style></head><body>${body}</body></html>`)}`
+}
+let connectivityCache = { online: false, checkedAt: 0 }
+async function hasInternetAccess() {
+  if (!net.isOnline()) return false
+  if (Date.now() - connectivityCache.checkedAt < 5000) return connectivityCache.online
+  const signal = AbortSignal.timeout(2600)
+  const checks = ['https://www.gstatic.com/generate_204', 'https://www.cloudflare.com/cdn-cgi/trace'].map(url => net.fetch(url, { method: 'GET', cache: 'no-store', signal }).then(response => response.ok).catch(() => false))
+  const online = (await Promise.all(checks)).some(Boolean)
+  connectivityCache = { online, checkedAt: Date.now() }
+  return online
+}
+function networkErrorPage(url: string, code: number, description: string, online: boolean | null) {
+  const checking = online === null
+  const offline = online === false
+  const refused = code === -102
+  const dns = code === -105
+  const title = checking ? 'Kapcsolat ellenőrzése…' : offline ? 'Nincs internetkapcsolat' : refused ? 'A webszerver nem válaszol' : dns ? 'A webcím nem található' : 'A webhely nem érhető el'
+  const detail = checking ? 'A Skipy ellenőrzi, hogy az internetkapcsolat vagy a megnyitott webhely hibásodott-e meg.' : offline ? 'A Skipy nem tudta elérni az internetet. Ellenőrizd a hálózati kapcsolatot, majd próbáld újra.' : refused ? 'Az internet működik, de a megadott kiszolgáló visszautasította a kapcsolatot.' : dns ? 'Az internet működik, de ehhez a webcímhez nem található kiszolgáló.' : 'Az internet működik, de ez a webhely pillanatnyilag nem válaszol.'
+  const body = `<main><div class="mark">!</div><p class="brand">SKIPY <b>BROWSER</b></p><h1>${escapeHtml(title)}</h1><p>${escapeHtml(detail)}</p><code>${escapeHtml(url)}</code><div class="actions"><a href="${escapeHtml(url)}">Próbáld újra</a></div><small>${escapeHtml(description)} · ${code}</small></main>`
+  const css = `*{box-sizing:border-box}html,body{margin:0;min-height:100%;background:#080809;color:#eef0f3;font-family:Segoe UI,Arial,sans-serif}body{display:grid;place-items:center;padding:32px;background:radial-gradient(circle at 50% 45%,#25160d 0,transparent 38%),#080809}main{width:min(560px,100%);text-align:center}.mark{width:64px;height:64px;display:grid;place-items:center;margin:0 auto 20px;border:1px solid #834010;border-radius:19px;background:#2f1d12;color:#ff7d20;font-size:30px;font-weight:800;box-shadow:0 0 34px #ff650021}.brand{margin:0 0 28px;color:#8f949e;font-size:10px;font-weight:700;letter-spacing:3px}.brand b{color:#ff7d20}h1{margin:0 0 12px;font-size:28px}p{margin:0 auto 18px;color:#aeb3bd;font-size:14px;line-height:1.55}code{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#777f8d;font:11px Consolas,monospace}.actions{margin:28px 0 22px}.actions a{display:inline-block;padding:11px 20px;border-radius:10px;background:#ff781b;color:#1b0f08;text-decoration:none;font-size:13px;font-weight:800;box-shadow:0 8px 24px #ff650024}.actions a:hover{background:#ff9145}small{color:#666d79;font-size:10px}`
+  return dataPage(body, css)
 }
 function removeNotice() {
   if (noticeTimer) clearTimeout(noticeTimer)
@@ -168,6 +241,13 @@ function transitionTo(fullscreen: boolean) {
   if (alreadyThere) complete()
 }
 
+function setViewBounds(view: WebContentsView, bounds: Electron.Rectangle) {
+  const previous = lastViewBounds.get(view)
+  if (previous && previous.x === bounds.x && previous.y === bounds.y && previous.width === bounds.width && previous.height === bounds.height) return
+  view.setBounds(bounds)
+  lastViewBounds.set(view, bounds)
+}
+
 function layout() {
   if (!window || window.isDestroyed()) return
   const [width, height] = window.getContentSize()
@@ -184,18 +264,20 @@ function layout() {
   const top = full ? 0 : TOOLBAR_HEIGHT + suggestionsInset
   for (const tab of tabs) {
     if (tab.view && tab.id === activeId) {
-      tab.view.setBounds({ x: 0, y: top, width: Math.max(0, width), height: Math.max(0, height - top) })
+      setViewBounds(tab.view, { x: 0, y: top, width: Math.max(0, width), height: Math.max(0, height - top) })
     }
   }
-  if (transitionView) transitionView.setBounds({ x: 0, y: 0, width, height })
-  if (panelView) panelView.setBounds({ x: Math.max(0, width - PANEL_WIDTH), y: TOOLBAR_HEIGHT, width: Math.min(PANEL_WIDTH, width), height: Math.max(0, height - TOOLBAR_HEIGHT) })
-  if (downloadsView) downloadsView.setBounds({ x: Math.max(0, Math.min(width - 330, Math.round(downloadsButton.x + downloadsButton.width - 330))), y: 42, width: Math.min(330, width), height: Math.min(420, Math.max(0, height - 42)) })
+  if (transitionView) setViewBounds(transitionView, { x: 0, y: 0, width, height })
+  if (panelView) setViewBounds(panelView, { x: Math.max(0, width - PANEL_WIDTH), y: TOOLBAR_HEIGHT, width: Math.min(PANEL_WIDTH, width), height: Math.max(0, height - TOOLBAR_HEIGHT) })
+  if (downloadsView) setViewBounds(downloadsView, { x: Math.max(0, Math.min(width - 330, Math.round(downloadsButton.x + downloadsButton.width - 330))), y: 42, width: Math.min(330, width), height: Math.min(420, Math.max(0, height - 42)) })
+  if (downloadConfirmView) setViewBounds(downloadConfirmView, { x: 0, y: 0, width, height })
+  if (jsDialogView) setViewBounds(jsDialogView, { x: 0, y: 0, width, height })
   if (toolView) {
     const y = Math.max(42, Math.min(height - 150, Math.round(toolAnchor.y + toolAnchor.height + 6)))
-    toolView.setBounds({ x: Math.max(0, Math.min(width - 340, Math.round(toolAnchor.x))), y, width: Math.min(340, width), height: Math.min(toolPopover === 'certificate' ? 350 : 190, Math.max(0, height - y - 8)) })
+    setViewBounds(toolView, { x: Math.max(0, Math.min(width - 340, Math.round(toolAnchor.x))), y, width: Math.min(340, width), height: Math.min(toolPopover === 'certificate' ? 350 : 310, Math.max(0, height - y - 8)) })
   }
-  for (const tab of tabs) if (tab.audioView) tab.audioView.setBounds({ x: Math.max(0, width - 1), y: Math.max(0, height - 1), width: 1, height: 1 })
-  if (noticeView) noticeView.setBounds({ x: Math.max(0, Math.floor((width - 420) / 2)), y: Math.max(0, height - 103), width: Math.min(420, width), height: 64 })
+  for (const tab of tabs) if (tab.audioView) setViewBounds(tab.audioView, { x: Math.max(0, width - 1), y: Math.max(0, height - 1), width: 1, height: 1 })
+  if (noticeView) setViewBounds(noticeView, { x: Math.max(0, Math.floor((width - 420) / 2)), y: Math.max(0, height - 103), width: Math.min(420, width), height: 64 })
 }
 
 function overlayView(kind: 'panel' | 'downloads') {
@@ -205,7 +287,7 @@ function overlayView(kind: 'panel' | 'downloads') {
     if (kind === 'panel' ? !!panel : downloadsOpen) showOverlay(kind)
     publish()
   })
-  void view.webContents.loadFile(path.join(__dirname, '..', 'dist', 'index.html'), { query: { overlay: kind } })
+  void view.webContents.loadFile(path.join(__dirname, '..', 'dist', 'overlay.html'), { query: { overlay: kind } })
   return view
 }
 
@@ -248,17 +330,20 @@ function setToolPopover(kind: 'certificate' | 'bass' | null, anchor?: { x: numbe
   toolPopover = toolPopover === kind ? null : kind
   if (anchor) toolAnchor = anchor
   if (toolPopover) {
-    if (!toolView) {
-      toolView = new WebContentsView({ webPreferences: { preload: path.join(__dirname, 'preload.js'), nodeIntegration: false, contextIsolation: true, sandbox: true } })
-      toolView.setBackgroundColor('#00000000')
-      toolView.webContents.on('did-finish-load', () => { layout(); publish() })
-      void toolView.webContents.loadFile(path.join(__dirname, '..', 'dist', 'index.html'), { query: { overlay: 'tool' } })
-    }
+    ensureToolView()
   } else if (toolView && toolAttached) {
     window.contentView.removeChildView(toolView)
     toolAttached = false
   }
   layout(); publish()
+}
+
+function ensureToolView() {
+  if (toolView) return
+  toolView = new WebContentsView({ webPreferences: { preload: path.join(__dirname, 'preload.js'), nodeIntegration: false, contextIsolation: true, sandbox: true } })
+  toolView.setBackgroundColor('#00000000')
+  toolView.webContents.on('did-finish-load', () => { layout(); publish() })
+  void toolView.webContents.loadFile(path.join(__dirname, '..', 'dist', 'overlay.html'), { query: { overlay: 'tool' } })
 }
 
 function scheduleDownloadsClose() {
@@ -310,7 +395,7 @@ function flyDownload(start: { x: number; y: number }) {
 
 function showTab(id: string) {
   const next = tabs.find(tab => tab.id === id)
-  if (!next) return
+  if (!next || next.closing) return
   const previous = current()
   if (previous?.view) window.contentView.removeChildView(previous.view)
   activeId = id
@@ -364,6 +449,18 @@ function certificateForUrl(url: string): CertificateState {
 function monitorCertificate(tab: Tab, wc: Electron.WebContents) {
   const debuggerApi = wc.debugger
   debuggerApi.on('message', (_event, method, params) => {
+    if (method === 'Page.javascriptDialogOpening') {
+      const dialogType = params?.type
+      if (!['alert', 'confirm', 'prompt', 'beforeunload'].includes(dialogType) || pendingJsDialog) {
+        if (pendingJsDialog) void debuggerApi.sendCommand('Page.handleJavaScriptDialog', { accept: false }).catch(() => undefined)
+        return
+      }
+      let host = 'Weboldal'
+      try { host = new URL(params.url || wc.getURL()).host || host } catch { /* Use the safe label. */ }
+      pendingJsDialog = { id: id(), tabId: tab.id, type: dialogType, message: String(params.message || '').slice(0, 4000), defaultPrompt: String(params.defaultPrompt || '').slice(0, 2000), host }
+      syncJsDialog()
+      return
+    }
     if (method !== 'Network.responseReceived' || params?.type !== 'Document') return
     const response = params.response
     if (!response || typeof response.url !== 'string' || !/^https:\/\//i.test(response.url)) return
@@ -377,10 +474,11 @@ function monitorCertificate(tab: Tab, wc: Electron.WebContents) {
     if (certificateKey(tab.url) === key || certificateKey(wc.getURL()) === key) { tab.certificate = candidate; publish() }
   })
   debuggerApi.on('detach', () => {
+    if (pendingJsDialog?.tabId === tab.id) { pendingJsDialog = null; syncJsDialog() }
     if (/^https:\/\//i.test(tab.url) && tab.certificate.status !== 'error') { tab.certificate = { status: 'unavailable', host: new URL(tab.url).host }; publish() }
   })
   tab.certReady = (async () => {
-    try { debuggerApi.attach('1.3'); await debuggerApi.sendCommand('Network.enable') }
+    try { debuggerApi.attach('1.3'); await Promise.all([debuggerApi.sendCommand('Network.enable'), debuggerApi.sendCommand('Page.enable')]) }
     catch { tab.certificate = /^https:\/\//i.test(tab.url) ? { status: 'unavailable', host: new URL(tab.url).host } : { status: 'none' }; publish() }
   })()
 }
@@ -410,7 +508,7 @@ function startBass(tab: Tab) {
   view.webContents.on('did-finish-load', () => {
     if (tab.audioView !== view || source.isDestroyed()) return
     try {
-      view.webContents.send('audio:start', tab.bassDb, tab.muted)
+      view.webContents.send('audio:start', tab.bassDb, globalBassFrequency, tab.muted)
     } catch (error) {
       stopBass(tab, true)
       tab.bassStatus = 'error'
@@ -427,25 +525,97 @@ function startBass(tab: Tab) {
 function setBass(tab: Tab, db: number) {
   tab.bassDb = db
   if (db === 0) stopBass(tab, true)
-  else if (tab.audioView && !tab.audioView.webContents.isDestroyed()) tab.audioView.webContents.send('audio:update', db, tab.muted)
+  else if (tab.audioView && !tab.audioView.webContents.isDestroyed()) tab.audioView.webContents.send('audio:update', db, globalBassFrequency, tab.muted)
   else startBass(tab)
   publish()
 }
 
-function setGlobalBass(db: number) {
+function setGlobalBass(db: number, frequency: number) {
   globalBassDb = db
+  globalBassFrequency = frequency
   for (const tab of tabs) setBass(tab, db)
   publish()
+}
+
+function contextDownload(tab: Tab, url: string, x: number, y: number) {
+  if (!tab.view || !/^https?:\/\//i.test(url)) return
+  recentClicks.set(tab.view.webContents.id, { x, y, at: Date.now() })
+  tab.view.webContents.downloadURL(url)
+}
+
+async function savePage(tab: Tab) {
+  if (!tab.view || tab.view.webContents.isDestroyed()) return
+  const title = (tab.title || 'weboldal').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').slice(0, 90) || 'weboldal'
+  const result = await dialog.showSaveDialog(window, { title: 'Weboldal mentése', defaultPath: path.join(app.getPath('downloads'), `${title}.html`), filters: [{ name: 'Teljes weboldal', extensions: ['html'] }] })
+  if (result.canceled || !result.filePath) return
+  try { await tab.view.webContents.savePage(result.filePath, 'HTMLComplete'); notice('A weboldal mentése elkészült.') }
+  catch { notice('A weboldal mentése nem sikerült.', 'error') }
+}
+
+function attachContextMenu(tab: Tab, wc: Electron.WebContents) {
+  wc.on('context-menu', (_event, params) => {
+    const template: MenuItemConstructorOptions[] = []
+    const separator = () => { if (template.length && template.at(-1)?.type !== 'separator') template.push({ type: 'separator' }) }
+    if (params.isEditable) {
+      template.push(
+        { label: 'Visszavonás', role: 'undo', enabled: params.editFlags.canUndo }, { label: 'Ismétlés', role: 'redo', enabled: params.editFlags.canRedo }, { type: 'separator' },
+        { label: 'Kivágás', role: 'cut', enabled: params.editFlags.canCut }, { label: 'Másolás', role: 'copy', enabled: params.editFlags.canCopy }, { label: 'Beillesztés', role: 'paste', enabled: params.editFlags.canPaste },
+        { label: 'Törlés', role: 'delete', enabled: params.editFlags.canDelete }, { label: 'Összes kijelölése', role: 'selectAll', enabled: params.editFlags.canSelectAll },
+      )
+    } else if (params.selectionText.trim()) {
+      const selection = params.selectionText.trim()
+      template.push({ label: 'Másolás', role: 'copy' }, { label: `Keresés: „${selection.slice(0, 45)}${selection.length > 45 ? '…' : ''}”`, click: () => createTab(resolveInput(selection), false) })
+    }
+    if (/^https?:\/\//i.test(params.linkURL)) {
+      separator()
+      template.push(
+        { label: 'Link megnyitása új lapon', click: () => createTab(params.linkURL, false) },
+        { label: 'Link letöltése', click: () => contextDownload(tab, params.linkURL, params.x, params.y) },
+        { label: 'Link címének másolása', click: () => clipboard.writeText(params.linkURL) },
+      )
+    }
+    if (params.mediaType === 'image' && /^https?:\/\//i.test(params.srcURL)) {
+      separator()
+      template.push(
+        { label: 'Kép megnyitása új lapon', click: () => createTab(params.srcURL, false) },
+        { label: 'Kép mentése', click: () => contextDownload(tab, params.srcURL, params.x, params.y) },
+        { label: 'Kép másolása', click: () => wc.copyImageAt(params.x, params.y) },
+        { label: 'Kép címének másolása', click: () => clipboard.writeText(params.srcURL) },
+      )
+    } else if ((params.mediaType === 'audio' || params.mediaType === 'video') && /^https?:\/\//i.test(params.srcURL)) {
+      separator()
+      const media = params.mediaType === 'video' ? 'Videó' : 'Hang'
+      template.push(
+        { label: `${media} megnyitása új lapon`, click: () => createTab(params.srcURL, false) },
+        { label: `${media} mentése`, click: () => contextDownload(tab, params.srcURL, params.x, params.y) },
+        { label: `${media} címének másolása`, click: () => clipboard.writeText(params.srcURL) },
+      )
+    }
+    separator()
+    template.push(
+      { label: 'Vissza', enabled: wc.navigationHistory.canGoBack(), click: () => wc.navigationHistory.goBack() },
+      { label: 'Előre', enabled: wc.navigationHistory.canGoForward(), click: () => wc.navigationHistory.goForward() },
+      { label: 'Újratöltés', click: () => wc.reload() },
+      { type: 'separator' },
+      { label: 'Weboldal mentése…', click: () => { void savePage(tab) } },
+      { label: 'Nyomtatás…', click: () => wc.print({ printBackground: true }) },
+      { label: 'Elem vizsgálata', click: () => wc.inspectElement(params.x, params.y) },
+    )
+    Menu.buildFromTemplate(template).popup({ window })
+  })
 }
 
 function attachPage(tab: Tab) {
   const view = new WebContentsView({ webPreferences: {
     nodeIntegration: false, contextIsolation: true, sandbox: true,
+    disableDialogs: true,
     disableHtmlFullscreenWindowResize: true,
     preload: path.join(__dirname, 'fingerprint-preload.js'),
   } })
   tab.view = view
   const wc = view.webContents
+  let showingErrorPage = false
+  attachContextMenu(tab, wc)
   monitorCertificate(tab, wc)
   wc.on('input-event', (_event, input) => {
     if (input.type === 'mouseUp' && 'x' in input && 'y' in input && typeof input.x === 'number' && typeof input.y === 'number') recentClicks.set(wc.id, { x: input.x, y: input.y, at: Date.now() })
@@ -459,6 +629,7 @@ function attachPage(tab: Tab) {
     if (!/^https?:\/\//i.test(url)) event.preventDefault()
   })
   wc.on('did-start-navigation', details => {
+    if (showingErrorPage && !details.url.startsWith('data:text/html')) showingErrorPage = false
     if (details.isMainFrame && !details.isSameDocument) {
       tab.favicon = null; tab.site = siteForUrl(details.url)
       tab.certCandidates.clear(); tab.certificate = certificateForUrl(details.url)
@@ -466,9 +637,9 @@ function attachPage(tab: Tab) {
       publish()
     }
   })
-  wc.on('did-start-loading', () => { tab.loading = true; tab.loadEpoch++; tab.error = null; publish() })
+  wc.on('did-start-loading', () => { tab.loading = true; tab.loadEpoch++; if (!showingErrorPage) tab.error = null; publish() })
   wc.on('did-stop-loading', () => { tab.loading = false; publish() })
-  wc.on('did-navigate', (_event, url) => { tab.url = url; tab.site = siteForUrl(url); tab.certificate = tab.certCandidates.get(certificateKey(url)) ?? certificateForUrl(url); publish() })
+  wc.on('did-navigate', (_event, url) => { if (showingErrorPage && url.startsWith('data:text/html')) return; tab.url = url; tab.site = siteForUrl(url); tab.certificate = tab.certCandidates.get(certificateKey(url)) ?? certificateForUrl(url); publish() })
   wc.on('did-navigate-in-page', (_event, url) => { tab.url = url; publish() })
   wc.on('did-finish-load', () => {
     if (tab.certificate.status === 'loading') { tab.certificate = { status: 'unavailable', host: /^https:\/\//i.test(wc.getURL()) ? new URL(wc.getURL()).host : undefined }; publish() }
@@ -497,7 +668,23 @@ function attachPage(tab: Tab) {
     publish()
   })
   wc.on('did-fail-load', (_event, code, description, url, isMainFrame) => {
-    if (isMainFrame && code !== -3) { tab.error = `Az oldal nem tölthető be: ${description}`; tab.url = url; if (tab.certificate.status === 'loading') tab.certificate = { status: 'unavailable', host: /^https:\/\//i.test(url) ? new URL(url).host : undefined }; if (tab.protection === 'pending') tab.protection = 'error'; if (tab.id === activeId) notice(tab.error, 'error'); publish() }
+    if (isMainFrame && code !== -3 && !url.startsWith('data:text/html')) {
+      tab.error = `Az oldal nem tölthető be: ${description}`; tab.url = url; tab.title = 'Betöltési hiba'; tab.loading = false
+      if (tab.certificate.status === 'loading') tab.certificate = { status: 'unavailable', host: /^https:\/\//i.test(url) ? new URL(url).host : undefined }
+      if (tab.protection === 'pending') tab.protection = 'error'
+      showingErrorPage = true
+      const failedUrl = url
+      void (async () => {
+        await wc.loadURL(networkErrorPage(failedUrl, code, description, null))
+        let local = false
+        try { const host = new URL(failedUrl).hostname; local = host === 'localhost' || host === '127.0.0.1' || host === '::1' } catch { /* Not a normal URL. */ }
+        const online = local || code === -102 ? true : code === -106 ? false : await hasInternetAccess()
+        if (!tab.view || tab.view.webContents !== wc || (!showingErrorPage && tab.url !== failedUrl)) return
+        await wc.loadURL(networkErrorPage(failedUrl, code, description, online))
+        tab.url = failedUrl; tab.loading = false; publish()
+      })().catch(() => undefined)
+      publish()
+    }
   })
   wc.on('certificate-error', (_event, url, error, _certificate, _callback, isMainFrame) => {
     if (isMainFrame) { tab.certificate = { status: 'error', host: /^https:\/\//i.test(url) ? new URL(url).host : undefined, error }; publish() }
@@ -518,14 +705,15 @@ function attachPage(tab: Tab) {
   })
 }
 
-function createTab(input = configuredHome()) {
-  const tab: Tab = { id: String(nextId++), view: null, title: 'Új lap', url: input === HOME_URL ? HOME_URL : resolveInput(input), favicon: null, loading: false, loadEpoch: 0, audible: false, muted: false, bassDb: globalBassDb, bassStatus: 'off', audioView: null, certificate: certificateForUrl(input === HOME_URL ? HOME_URL : resolveInput(input)), certCandidates: new Map(), certReady: null, error: null, site: input === HOME_URL ? null : siteForUrl(resolveInput(input)), protection: 'pending' }
+function createTab(input = configuredHome(), activate = true) {
+  const tab: Tab = { id: String(nextId++), view: null, title: 'Új lap', url: input === HOME_URL ? HOME_URL : resolveInput(input), favicon: null, loading: false, loadEpoch: 0, audible: false, muted: false, bassDb: globalBassDb, bassStatus: 'off', audioView: null, certificate: certificateForUrl(input === HOME_URL ? HOME_URL : resolveInput(input)), certCandidates: new Map(), certReady: null, error: null, site: input === HOME_URL ? null : siteForUrl(resolveInput(input)), protection: 'pending', closing: false }
   tabs.push(tab)
   if (input !== HOME_URL) {
     attachPage(tab)
     void loadPage(tab, resolveInput(input))
   }
-  showTab(tab.id)
+  if (activate || !activeId) showTab(tab.id)
+  else publish()
   return tab
 }
 
@@ -554,24 +742,52 @@ function navigate(input: string) {
 }
 
 function closeTab(id: string) {
+  const tab = tabs.find(item => item.id === id)
+  if (!tab || tab.closing) return
+  tab.closing = true
+  closeTimers.set(id, setTimeout(() => finishCloseTab(id), 360))
+  publish()
+}
+
+function finishCloseTab(id: string) {
   const index = tabs.findIndex(tab => tab.id === id)
   if (index < 0) return
+  const timer = closeTimers.get(id)
+  if (timer) clearTimeout(timer)
+  closeTimers.delete(id)
   const [tab] = tabs.splice(index, 1)
+  if (pendingJsDialog?.tabId === id) { pendingJsDialog = null; syncJsDialog() }
   stopBass(tab, true)
   if (tab.view) {
     if (id === activeId) window.contentView.removeChildView(tab.view)
     tab.view.webContents.close()
   }
-  if (!tabs.length) { activeId = ''; createTab(); return }
-  if (id === activeId) { activeId = ''; showTab(tabs[Math.min(index, tabs.length - 1)].id) }
+  if (!tabs.length) { activeId = ''; window.close(); return }
+  if (id === activeId) {
+    activeId = ''
+    const available = [...tabs.slice(index), ...tabs.slice(0, index)].find(item => !item.closing)
+    if (available) showTab(available.id)
+    else publish()
+  }
   else publish()
+}
+
+function toggleDevTools() {
+  const contents = current()?.view?.webContents ?? window.webContents
+  if (contents.isDestroyed()) return
+  if (contents.isDevToolsOpened()) contents.closeDevTools()
+  else contents.openDevTools({ mode: 'detach', activate: true })
 }
 
 function handleShortcut(input: Electron.Input, event?: { preventDefault(): void }) {
   if (input.type !== 'keyDown') return
   const ctrl = input.control || input.meta
   const key = input.key.toLowerCase()
-  if (key === 'f11') {
+  if (key === 'f12' || (ctrl && input.shift && key === 'i')) {
+    event?.preventDefault()
+    toggleDevTools()
+  }
+  else if (key === 'f11') {
     if (videoFullscreenTabId) return
     event?.preventDefault()
     appFullscreen = !appFullscreen
@@ -615,42 +831,111 @@ function uniqueDownloadPath(filename: string): string {
   return candidate
 }
 
+function syncDownloadConfirmation() {
+  if (!pendingDownloads.length) {
+    if (downloadConfirmView && downloadConfirmAttached) { window.contentView.removeChildView(downloadConfirmView); downloadConfirmAttached = false }
+    publish(); return
+  }
+  if (!downloadConfirmView) ensureDownloadConfirmView()
+  if (downloadConfirmView && !downloadConfirmAttached && !downloadConfirmView.webContents.isLoadingMainFrame()) {
+    window.contentView.addChildView(downloadConfirmView); downloadConfirmAttached = true; layout()
+  }
+  publish()
+}
+
+function ensureDownloadConfirmView() {
+  if (downloadConfirmView) return
+  downloadConfirmView = new WebContentsView({ webPreferences: { preload: path.join(__dirname, 'preload.js'), nodeIntegration: false, contextIsolation: true, sandbox: true } })
+  downloadConfirmView.setBackgroundColor('#00000000')
+  downloadConfirmView.webContents.on('did-finish-load', () => { if (pendingDownloads.length) syncDownloadConfirmation(); publish() })
+  void downloadConfirmView.webContents.loadFile(path.join(__dirname, '..', 'dist', 'overlay.html'), { query: { overlay: 'download-confirm' } })
+}
+
+function ensureJsDialogView() {
+  if (jsDialogView) return
+  jsDialogView = new WebContentsView({ webPreferences: { preload: path.join(__dirname, 'preload.js'), nodeIntegration: false, contextIsolation: true, sandbox: true } })
+  jsDialogView.setBackgroundColor('#00000000')
+  jsDialogView.webContents.on('did-finish-load', () => { if (pendingJsDialog) syncJsDialog(); publish() })
+  void jsDialogView.webContents.loadFile(path.join(__dirname, '..', 'dist', 'overlay.html'), { query: { overlay: 'js-dialog' } })
+}
+
+function syncJsDialog() {
+  if (!pendingJsDialog) {
+    if (jsDialogView && jsDialogAttached) { window.contentView.removeChildView(jsDialogView); jsDialogAttached = false }
+    publish(); return
+  }
+  ensureJsDialogView()
+  if (jsDialogView && !jsDialogAttached && !jsDialogView.webContents.isLoadingMainFrame()) {
+    window.contentView.addChildView(jsDialogView); jsDialogAttached = true; layout()
+  }
+  publish()
+}
+
+function answerJsDialog(dialogId: string, accept: boolean, promptText = '') {
+  const pending = pendingJsDialog
+  if (!pending || pending.id !== dialogId) return
+  const tab = tabs.find(item => item.id === pending.tabId)
+  pendingJsDialog = null
+  syncJsDialog()
+  if (!tab?.view || tab.view.webContents.isDestroyed() || !tab.view.webContents.debugger.isAttached()) return
+  void tab.view.webContents.debugger.sendCommand('Page.handleJavaScriptDialog', { accept, ...(pending.type === 'prompt' && accept ? { promptText: promptText.slice(0, 2000) } : {}) }).catch(() => undefined)
+}
+
+function activateDownload(pending: PendingDownload) {
+  const { item } = pending
+  const savePath = uniqueDownloadPath(pending.filename)
+  item.setSavePath(savePath)
+  const entry: DownloadEntry = { id: id(), name: path.basename(savePath), path: savePath, url: item.getURL(), received: 0, total: item.getTotalBytes(), status: 'progressing', startedAt: Date.now() }
+  getLibrary().downloads.unshift(entry)
+  sessionDownloadIds.add(entry.id)
+  runningDownloads.set(entry.id, item)
+  setDownloadsOpen(true)
+  flyDownload(pending.start)
+  item.on('updated', (_event, status) => {
+    entry.received = item.getReceivedBytes(); entry.total = item.getTotalBytes()
+    if (status === 'interrupted') entry.status = 'interrupted'
+    publish()
+  })
+  item.on('done', (_event, status) => {
+    entry.received = item.getReceivedBytes(); entry.total = item.getTotalBytes(); entry.status = status
+    notice(status === 'completed' ? `Letöltve: ${entry.name}` : `A letöltés ${status === 'cancelled' ? 'megszakadt' : 'nem sikerült'}.`, status === 'completed' ? 'success' : 'error')
+    runningDownloads.delete(entry.id); scheduleDownloadsClose(); saveLibrary(); publish()
+  })
+  saveLibrary(); item.resume(); publish()
+}
+
+function decideDownload(pendingId: string, allow: boolean) {
+  const index = pendingDownloads.findIndex(entry => entry.id === pendingId)
+  if (index < 0) return
+  const [pending] = pendingDownloads.splice(index, 1)
+  if (allow) activateDownload(pending)
+  else pending.item.cancel()
+  syncDownloadConfirmation()
+}
+
 function trackDownloads() {
   session.defaultSession.on('will-download', (_event, item, contents) => {
-    const savePath = uniqueDownloadPath(item.getFilename())
-    item.setSavePath(savePath)
-    const entry: DownloadEntry = { id: id(), name: path.basename(savePath), path: savePath, url: item.getURL(), received: 0, total: item.getTotalBytes(), status: 'progressing', startedAt: Date.now() }
-    getLibrary().downloads.unshift(entry)
-    sessionDownloadIds.add(entry.id)
-    runningDownloads.set(entry.id, item)
-    setDownloadsOpen(true)
+    item.pause()
+    if (!item.isPaused()) { item.cancel(); notice('A letöltés nem szüneteltethető biztonságosan.', 'error'); return }
     const sourceTab = tabs.find(tab => tab.view?.webContents.id === contents?.id)
     const click = contents && recentClicks.get(contents.id)
     const [width, height] = window.getContentSize()
     const start = sourceTab && click && Date.now() - click.at < 1800
       ? { x: click.x + sourceTab.view!.getBounds().x, y: click.y + sourceTab.view!.getBounds().y }
       : { x: width / 2, y: (height + TOOLBAR_HEIGHT) / 2 }
-    flyDownload(start)
-    saveLibrary(); publish()
-    item.on('updated', (_event, status) => {
-      entry.received = item.getReceivedBytes()
-      entry.total = item.getTotalBytes()
-      if (status === 'interrupted') entry.status = 'interrupted'
-      publish()
+    let host = 'ismeretlen forrás'
+    try { host = new URL(item.getURL()).host || host } catch { /* Keep the safe fallback. */ }
+    const pending: PendingDownload = { id: id(), item, contents: contents ?? null, filename: item.getFilename(), host, total: item.getTotalBytes(), start }
+    pendingDownloads.push(pending)
+    item.on('done', () => {
+      const pendingIndex = pendingDownloads.findIndex(entry => entry.id === pending.id)
+      if (pendingIndex >= 0) { pendingDownloads.splice(pendingIndex, 1); syncDownloadConfirmation() }
     })
-    item.on('done', (_event, status) => {
-      entry.received = item.getReceivedBytes()
-      entry.total = item.getTotalBytes()
-      entry.status = status
-      notice(status === 'completed' ? `Letöltve: ${entry.name}` : `A letöltés ${status === 'cancelled' ? 'megszakadt' : 'nem sikerült'}.`, status === 'completed' ? 'success' : 'error')
-      runningDownloads.delete(entry.id)
-      scheduleDownloadsClose()
-      saveLibrary(); publish()
-    })
+    syncDownloadConfirmation()
   })
 }
 
-app.whenReady().then(() => {
+if (hasSingleInstanceLock) void app.whenReady().then(() => {
   loadLibrary()
   loadPrivacy()
   ipcMain.on('privacy:fingerprint-config', event => {
@@ -670,7 +955,7 @@ app.whenReady().then(() => {
     if (kind === 'active' && tab.view && !tab.view.webContents.isDestroyed()) {
       tab.bassStatus = 'active'
       tab.view.webContents.setAudioMuted(false)
-      tab.audioView?.webContents.send('audio:update', tab.bassDb, tab.muted)
+      tab.audioView?.webContents.send('audio:update', tab.bassDb, globalBassFrequency, tab.muted)
     } else if (kind === 'error') {
       stopBass(tab, true)
       tab.bassStatus = 'error'
@@ -701,6 +986,8 @@ app.whenReady().then(() => {
   const transitionCss = `html{margin:0;width:100%;height:100%;background:transparent}body{margin:0;width:100%;height:100%;background:#080809;overflow:hidden;opacity:1;transition:opacity .28s cubic-bezier(.22,1,.36,1)}body.reveal{opacity:0}body:after{content:"";position:absolute;left:50%;top:50%;width:42vmax;height:42vmax;border-radius:50%;background:radial-gradient(circle,#17100c 0,#0b0908 35%,#080809 72%);transform:translate(-50%,-50%) scale(.7);opacity:.55}body.zoom:after{animation:zoom .42s cubic-bezier(.22,1,.36,1) both}@keyframes zoom{to{transform:translate(-50%,-50%) scale(1.45);opacity:.16}}@media(prefers-reduced-motion:reduce){body,body.zoom:after{transition:none;animation:none}}`
   void transitionSurface.webContents.loadURL(dataPage('', transitionCss)).catch(() => undefined)
   window.on('closed', () => {
+    if (pendingJsDialog) answerJsDialog(pendingJsDialog.id, false)
+    for (const pending of pendingDownloads.splice(0)) pending.item.cancel()
     for (const tab of tabs) stopBass(tab, true)
     if (transitionSurface && !transitionSurface.webContents.isDestroyed()) transitionSurface.webContents.close()
     transitionSurface = null
@@ -712,14 +999,21 @@ app.whenReady().then(() => {
   window.on('maximize', publish)
   window.on('unmaximize', publish)
   window.webContents.on('before-input-event', (event, input) => handleShortcut(input, event))
-  window.webContents.on('did-finish-load', publish)
+  window.webContents.on('did-finish-load', () => {
+    publish()
+    setTimeout(() => { if (!panelView) panelView = overlayView('panel') }, 250)
+    setTimeout(() => ensureToolView(), 450)
+    setTimeout(() => { if (!downloadsView) downloadsView = overlayView('downloads') }, 650)
+    setTimeout(() => ensureDownloadConfirmView(), 850)
+    setTimeout(() => ensureJsDialogView(), 1050)
+  })
   void window.loadFile(path.join(__dirname, '..', 'dist', 'index.html'))
   createTab()
 
   ipcMain.handle('browser:command', (event, action: unknown, value: unknown) => {
-    if (event.sender !== window.webContents && event.sender !== panelView?.webContents && event.sender !== downloadsView?.webContents && event.sender !== toolView?.webContents || typeof action !== 'string') return
+    if (event.sender !== window.webContents && event.sender !== panelView?.webContents && event.sender !== downloadsView?.webContents && event.sender !== toolView?.webContents && event.sender !== downloadConfirmView?.webContents && event.sender !== jsDialogView?.webContents || typeof action !== 'string') return
     const text = typeof value === 'string' ? value : ''
-    if (action === 'state') return publicState()
+    if (action === 'state') return stateFor(event.sender)
     if (action === 'notice-error') { if (text.length <= 180) notice(text, 'error'); return }
     if (action === 'window-minimize') window.minimize()
     else if (action === 'window-maximize') {
@@ -730,6 +1024,10 @@ app.whenReady().then(() => {
     else if (action === 'new') createTab()
     else if (action === 'select') showTab(text)
     else if (action === 'close') closeTab(text)
+    else if (action === 'finish-close') {
+      if (event.sender === window.webContents && tabs.find(tab => tab.id === text)?.closing) finishCloseTab(text)
+      return
+    }
     else if (action === 'suggestion-inset') {
       const inset = Number(text)
       if (Number.isInteger(inset) && inset >= 0 && inset <= 400 && inset !== suggestionsInset) { suggestionsInset = inset; layout() }
@@ -739,13 +1037,15 @@ app.whenReady().then(() => {
       const tab = tabs.find(item => item.id === text)
       if (tab?.view && !tab.view.webContents.isDestroyed()) {
         tab.muted = !tab.muted
-        if (tab.audioView && !tab.audioView.webContents.isDestroyed()) tab.audioView.webContents.send('audio:update', tab.bassDb, tab.muted)
+        if (tab.audioView && !tab.audioView.webContents.isDestroyed()) tab.audioView.webContents.send('audio:update', tab.bassDb, globalBassFrequency, tab.muted)
         else tab.view.webContents.setAudioMuted(tab.muted)
       }
     }
     else if (action === 'bass-set') {
-      const db = Number(text)
-      if (text.trim() !== '' && Number.isInteger(db) && db >= 0 && db <= 12) setGlobalBass(db)
+      try {
+        const value = JSON.parse(text) as { db: number; frequency: number }
+        if (Number.isInteger(value.db) && value.db >= 0 && value.db <= 12 && Number.isInteger(value.frequency) && value.frequency >= 60 && value.frequency <= 160) setGlobalBass(value.db, value.frequency)
+      } catch { /* Ignore invalid audio controls. */ }
     }
     else if (action === 'tool') {
       if (event.sender !== window.webContents) return
@@ -769,6 +1069,18 @@ app.whenReady().then(() => {
     }
     else if (action === 'downloads-toggle') setDownloadsOpen(!downloadsOpen)
     else if (action === 'downloads-close') setDownloadsOpen(false)
+    else if (action === 'download-confirm' || action === 'download-reject') {
+      if (event.sender === downloadConfirmView?.webContents && pendingDownloads[0]?.id === text) decideDownload(text, action === 'download-confirm')
+      return
+    }
+    else if (action === 'js-dialog-answer') {
+      if (event.sender !== jsDialogView?.webContents) return
+      try {
+        const answer = JSON.parse(text) as { id?: unknown; accept?: unknown; promptText?: unknown }
+        if (typeof answer.id === 'string' && typeof answer.accept === 'boolean') answerJsDialog(answer.id, answer.accept, typeof answer.promptText === 'string' ? answer.promptText : '')
+      } catch { /* Ignore invalid dialog responses. */ }
+      return
+    }
     else if (action === 'downloads-button-bounds') {
       try {
         const bounds = JSON.parse(text)
@@ -862,5 +1174,17 @@ app.whenReady().then(() => {
   })
 })
 
-app.on('before-quit', flushPrivacy)
+let dataFlushedForQuit = false
+app.on('before-quit', event => {
+  flushPrivacy()
+  if (dataFlushedForQuit) return
+  event.preventDefault()
+  void flushLibrary().finally(() => { dataFlushedForQuit = true; app.quit() })
+})
 app.on('window-all-closed', () => app.quit())
+app.on('second-instance', () => {
+  if (!window || window.isDestroyed()) return
+  if (window.isMinimized()) window.restore()
+  window.show()
+  window.focus()
+})

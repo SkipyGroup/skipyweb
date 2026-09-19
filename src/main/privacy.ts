@@ -9,6 +9,7 @@ type PrivacyData = { secret: string; rules: Record<string, string[]>; disabledSi
 const MAX_ROWS = 2000
 let filePath = ''
 let data: PrivacyData = { secret: randomBytes(32).toString('hex'), rules: {}, disabledSites: [], requests: [] }
+const requestIndex = new Map<string, RequestRow>()
 let saveTimer: ReturnType<typeof setTimeout> | null = null
 
 export function siteForHost(host: string): string {
@@ -44,7 +45,13 @@ export function loadPrivacy() {
       if (Array.isArray(record.requests)) data.requests = record.requests.filter(validRow).slice(0, MAX_ROWS)
     }
   } catch { /* Missing or damaged file starts with safe defaults. */ }
+  rebuildIndex()
   flushPrivacy()
+}
+function requestKey(site: string, host: string) { return `${site}\u0000${host}` }
+function rebuildIndex() {
+  requestIndex.clear()
+  for (const row of data.requests) requestIndex.set(requestKey(row.site, row.host), row)
 }
 function validRow(value: unknown): value is RequestRow {
   const row = value as RequestRow
@@ -83,10 +90,12 @@ export function requestSummary(site: string) {
   }
 }
 export function recordRequest(site: string, host: string, blocked: boolean) {
-  let row = data.requests.find(item => item.site === site && item.host === host)
+  const key = requestKey(site, host)
+  let row = requestIndex.get(key)
   if (!row) {
     row = { site, host, count: 0, blocked: 0, lastSeen: 0 }
     data.requests.push(row)
+    requestIndex.set(key, row)
   }
   row.count++
   if (blocked) row.blocked++
@@ -94,10 +103,12 @@ export function recordRequest(site: string, host: string, blocked: boolean) {
   if (data.requests.length > MAX_ROWS) {
     data.requests.sort((a, b) => b.lastSeen - a.lastSeen)
     data.requests.length = MAX_ROWS
+    rebuildIndex()
   }
   scheduleSave()
 }
 export function clearRequests(site?: string) {
   data.requests = site ? data.requests.filter(row => row.site !== site) : []
+  rebuildIndex()
   flushPrivacy()
 }

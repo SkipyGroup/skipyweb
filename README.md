@@ -23,13 +23,15 @@ A 64 bites Windows telepítő a `release/Skipy-Browser-Setup-0.1.0-x64.exe` fáj
 
 ## Használat
 
-A címsor webcímeket nyit meg, más szövegre Google-keresést indít. A `Ctrl+T` új lapot nyit, a `Ctrl+W` bezárja az aktív lapot, a `Ctrl+L` kijelöli a címsort. Az `Alt+Balra` és `Alt+Jobbra` a lap előzményeiben lépked.
+A címsor webcímeket nyit meg, más szövegre Google-keresést indít. A `Ctrl+T` új lapot nyit, a `Ctrl+W` bezárja az aktív lapot, a `Ctrl+L` kijelöli a címsort. Az `Alt+Balra` és `Alt+Jobbra` a lap előzményeiben lépked. A lapfül középső egérgombbal is bezárható; az utolsó lap bezárása kilép a böngészőből. Az `F12` vagy `Ctrl+Shift+I` külön ablakban nyitja és zárja az aktív oldal fejlesztői eszközeit.
 
 A címsor melletti csillaggal az aktuális oldal könyvjelzőként menthető vagy eltávolítható. A jobb oldali gombokkal nyithatók meg a weboldal fölé csúszó panelek. Az előzményeknél egyetlen bejegyzés és a teljes lista is törölhető. A letöltések a Windows Letöltések mappájába kerülnek. Indításukkor az ikon felé repülő jelzés látszik, és megnyílik a letöltések lebegő ablaka. Ebben a futás közben indult letöltések megszakíthatók, a kész fájl megmutatható a Fájlkezelőben. Az ablak az ikonról újranyitható; a listából eltávolítás nem törli a fájlt.
 
 A lapfüleken, a könyvjelzőkben és az előzményekben a weboldal ikonja jelenik meg, ha az oldal megad egy favicon URL-t. A fogaskerék gombbal nyitható beállításpanelen Google, DuckDuckGo vagy Bing választható keresőnek. Ugyanitt a Skipy kezdőlap helyett egy teljes `http://` vagy `https://` webcím állítható be; az új lap és a Home gomb ezt nyitja meg.
 
-A címsori biztonsági ikon az aktív oldal HTTPS-tanúsítványának elérhető adatait mutatja, vagy jelzi a kapcsolat hibáját. A felső sáv Bass Booster gombjával a böngésző összes nyitott lapjának hangjára 0–12 dB mélyhangkiemelés állítható be. A 0 dB kikapcsolja a feldolgozást; a beállítás az alkalmazás bezárásáig marad meg. Ha egy lap hangrögzítése nem indul el, azon a lapon visszaáll a normál hang.
+A címsori biztonsági ikon az aktív oldal HTTPS-tanúsítványának elérhető adatait mutatja, vagy jelzi a kapcsolat hibáját. A felső sáv Bass Booster gombjával Tiszta, Mély és Erős preset, valamint 0–12 dB erősség és 60–160 Hz basszusfrekvencia állítható be a böngésző összes lapjára. A 0 dB kikapcsolja a feldolgozást; a beállítás az alkalmazás bezárásáig marad meg.
+
+A weboldalon jobb kattintással linkek, képek és médiák nyithatók meg vagy tölthetők le, kijelölt szöveg kereshető, az oldal pedig teljes HTML-változatban menthető. Minden webes letöltés először egy Skipy megerősítő ablakban jelenik meg; csak a Letöltés gomb után indul el és kerül be a letöltési listába.
 
 Az Adatvédelem panel webhelyenként, célhost szerint összesíti a hálózati kéréseket. Egy host letiltható és később feloldható. Az összesített napló újraindítás után is megmarad, de teljes URL-t nem tárol; webhelyenként vagy teljesen törölhető. A tiltási szabályokat a napló törlése nem érinti.
 
