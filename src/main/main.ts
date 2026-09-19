@@ -407,8 +407,7 @@ function startBass(tab: Tab) {
   view.webContents.on('did-finish-load', () => {
     if (tab.audioView !== view || source.isDestroyed()) return
     try {
-      const sourceId = source.getMediaSourceId(view.webContents)
-      view.webContents.send('audio:start', sourceId, tab.bassDb, tab.muted)
+      view.webContents.send('audio:start', tab.bassDb, tab.muted)
     } catch (error) {
       stopBass(tab, true)
       tab.bassStatus = 'error'
@@ -672,6 +671,12 @@ app.whenReady().then(() => {
   })
   const isBrowserTab = (contents: Electron.WebContents | null) => !!contents && tabs.some(tab => tab.view?.webContents.id === contents.id)
   const isAudioProcessor = (contents: Electron.WebContents | null) => !!contents && tabs.some(tab => tab.audioView?.webContents.id === contents.id)
+  session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
+    const tab = tabs.find(item => item.audioView?.webContents.mainFrame === request.frame)
+    const source = tab?.view?.webContents.mainFrame
+    if (!request.frame || !tab || !source || !request.audioRequested || !request.videoRequested) { callback({}); return }
+    callback({ video: source, audio: source, enableLocalEcho: false })
+  })
   session.defaultSession.setPermissionRequestHandler((contents, permission, callback) => callback(permission === 'fullscreen' && isBrowserTab(contents) || (permission === 'display-capture' || permission === 'media') && isAudioProcessor(contents)))
   session.defaultSession.setPermissionCheckHandler((contents, permission) => permission === 'fullscreen' && isBrowserTab(contents) || (permission === 'display-capture' || permission === 'media') && isAudioProcessor(contents))
   window = new BrowserWindow({

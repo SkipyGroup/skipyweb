@@ -1,7 +1,7 @@
 export {}
 
 type AudioBridge = {
-  onStart(callback: (sourceId: string, db: number, muted: boolean) => void): void
+  onStart(callback: (db: number, muted: boolean) => void): void
   onUpdate(callback: (db: number, muted: boolean) => void): void
   onStop(callback: () => void): void
   status(kind: 'active' | 'error', message?: string): void
@@ -25,14 +25,14 @@ async function stop() {
   context = null
 }
 
-window.skipyAudio.onStart(async (sourceId, db, muted) => {
+window.skipyAudio.onStart(async (db, muted) => {
   if (starting) return
   starting = true
   const timeout = setTimeout(() => window.skipyAudio.status('error', 'A hangrögzítés nem indult el időben.'), 8000)
   await stop()
   try {
-    const constraints = { audio: { mandatory: { chromeMediaSource: 'tab', chromeMediaSourceId: sourceId } }, video: false } as unknown as MediaStreamConstraints
-    stream = await navigator.mediaDevices.getUserMedia(constraints)
+    stream = await navigator.mediaDevices.getDisplayMedia({ audio: true, video: true })
+    stream.getVideoTracks().forEach(track => track.stop())
     const track = stream.getAudioTracks()[0]
     if (!track) throw new Error('Nincs hangcsatorna a lapon.')
     context = new AudioContext()

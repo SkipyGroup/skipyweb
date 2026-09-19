@@ -34,7 +34,7 @@ const address = $('address') as HTMLInputElement
 const homeSearch = $('home-search') as HTMLInputElement
 const home = $('home-screen')
 const overlayMode = new URLSearchParams(location.search).get('overlay')
-if (overlayMode === 'panel' || overlayMode === 'downloads') document.body.classList.add(`overlay-${overlayMode}`)
+if (overlayMode === 'panel' || overlayMode === 'downloads' || overlayMode === 'tool') document.body.classList.add(`overlay-${overlayMode}`)
 let overlayClosing = false
 let lastOverlayPanel: State['panel'] = null
 const tabElements = new Map<string, HTMLElement>()
