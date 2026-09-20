@@ -809,10 +809,14 @@ function attachPage(tab: Tab) {
   wc.on('page-favicon-updated', (_event, favicons) => {
     const icon = favicons.find(validFavicon)
     if (!icon || !/^https?:\/\//i.test(wc.getURL())) return
+    if (siteForUrl(wc.getURL()) !== tab.site) return
     tab.favicon = icon
     let changed = false
     for (const entry of [...getLibrary().bookmarks, ...getLibrary().history]) {
       if (entry.url === wc.getURL() && entry.favicon !== icon) { entry.favicon = icon; changed = true }
+    }
+    for (const entry of getLibrary().quickLinks) {
+      try { if (new URL(entry.url).origin === new URL(wc.getURL()).origin && entry.favicon !== icon) { entry.favicon = icon; changed = true } } catch { /* Validated URLs only. */ }
     }
     if (changed) saveLibrary()
     publish()
@@ -1655,10 +1659,11 @@ if (hasSingleInstanceLock) void app.whenReady().then(() => {
       const links = getLibrary().quickLinks
       const existing = typeof draft.id === 'string' ? links.find(item => item.id === draft.id) : undefined
       if (draft.id && !existing) return 'A gyors elérés nem található.'
-      if (existing) { existing.title = title; existing.url = url }
+      const knownIcon = [...tabs.map(item => ({ url: item.url, favicon: item.favicon ?? undefined })), ...getLibrary().bookmarks, ...getLibrary().history].find(item => { try { return !!item.favicon && new URL(item.url).origin === new URL(url).origin } catch { return false } })?.favicon
+      if (existing) { existing.title = title; if (existing.url !== url) existing.favicon = knownIcon; existing.url = url }
       else {
         if (links.length >= 6) return 'Legfeljebb hat gyors elérés adható hozzá.'
-        links.push({ id: id(), title, url })
+        links.push({ id: id(), title, url, ...(knownIcon ? { favicon: knownIcon } : {}) })
       }
       saveLibrary()
       notice(existing ? 'Gyors elérés módosítva.' : 'Gyors elérés hozzáadva.')

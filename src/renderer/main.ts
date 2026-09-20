@@ -16,7 +16,7 @@ type CertificateState = { status: 'none' | 'loading' | 'secure' | 'error' | 'una
 type Bookmark = { id: string; title: string; url: string; createdAt: number; favicon?: string; folder?: string }
 type HistoryEntry = { id: string; title: string; url: string; visitedAt: number; favicon?: string }
 type DownloadEntry = { id: string; name: string; path: string; url: string; received: number; total: number; status: 'progressing' | 'paused' | 'completed' | 'cancelled' | 'interrupted'; startedAt: number }
-type QuickLink = { id: string; title: string; url: string }
+type QuickLink = { id: string; title: string; url: string; favicon?: string }
 type Privacy = { site: string; protection: 'active' | 'error' | 'pending'; fingerprintEnabled: boolean; blockedHosts: string[]; rows: { site: string; host: string; count: number; blocked: number; lastSeen: number; blockedNow: boolean }[] }
 type State = { privateMode: boolean; defaultBrowser: boolean; activeId: string; sdtOpen: boolean; globalBassDb: number; globalBassFrequency: number; maximized: boolean; fullscreenMode: 'none' | 'app' | 'video'; tabs: Tab[]; panel: 'bookmarks' | 'history' | 'downloads' | 'settings' | 'privacy' | 'extensions' | null; downloadsOpen: boolean; sessionDownloadIds: string[]; pendingDownload: { id: string; filename: string; host: string; total: number } | null; toolPopover: 'certificate' | 'bass' | null; certificate: CertificateState; pageSafety: { level: 'safe' | 'warning' | 'danger'; title: string; reasons: string[] }; privacy: Privacy | null; swp: { adblock:boolean; listStatus:'bundled'|'updated'|'error' } | null; library: { bookmarks: Bookmark[]; history: HistoryEntry[]; downloads: DownloadEntry[]; quickLinks: QuickLink[]; extensions: {id:string;name:string;path:string;enabled:boolean}[]; settings: { searchEngine: 'google' | 'duckduckgo' | 'bing'; homepage: string; developerMode: boolean; onboardingComplete: boolean; autoHibernateMinutes: number } } }
 type BrowserBridge = {
@@ -217,7 +217,9 @@ function renderQuickLinks() {
     open.className = 'quick-open'
     const emblem = document.createElement('span')
     emblem.className = 'quick-emblem'
-    emblem.append(icon('globe'))
+    let iconUrl = link.favicon
+    if (!iconUrl) { try { iconUrl = `${new URL(link.url).origin}/favicon.ico` } catch { /* Keep fallback. */ } }
+    emblem.append(favicon(iconUrl))
     const name = document.createElement('span')
     name.className = 'quick-name'
     name.textContent = link.title
@@ -696,6 +698,8 @@ function render(next: State) {
   }
   tabsElement.querySelector('.new-tab')?.remove()
 
+  if (activeChanged) requestAnimationFrame(() => tabElements.get(state.activeId)?.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'nearest', inline: 'nearest' }))
+
   if (activeChanged || document.activeElement !== address) {
     address.value = active?.url === 'skipy://home' ? '' : active?.url ?? ''
     closeSuggestions(address)
@@ -756,6 +760,12 @@ $('new-window').addEventListener('click', () => command('new-window'))
 $('new-private-window').addEventListener('click', () => command('new-private-window'))
 $('new-tab').addEventListener('click', () => { command('new'); focusAddress() })
 document.querySelectorAll('#create-menu button').forEach(button => button.addEventListener('click', () => { ($('create-menu') as HTMLDetailsElement).open = false }))
+tabsElement.addEventListener('wheel', event => {
+  if (tabsElement.scrollWidth <= tabsElement.clientWidth) return
+  event.preventDefault()
+  const distance = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY
+  tabsElement.scrollBy({ left: distance, behavior: 'auto' })
+}, { passive: false })
 $('panel-close').addEventListener('click', () => command(overlayMode === 'downloads' ? 'downloads-close' : 'panel', overlayMode === 'downloads' ? undefined : 'close'))
 window.addEventListener('resize', updateDownloadsButton)
 $('window-minimize').addEventListener('click', () => command('window-minimize'))

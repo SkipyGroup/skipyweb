@@ -6,7 +6,7 @@ export type Bookmark = { id: string; title: string; url: string; createdAt: numb
 export type HistoryEntry = { id: string; title: string; url: string; visitedAt: number; favicon?: string }
 export type DownloadEntry = { id: string; name: string; path: string; url: string; received: number; total: number; status: 'progressing' | 'paused' | 'completed' | 'cancelled' | 'interrupted'; startedAt: number }
 export type Settings = { searchEngine: 'google' | 'duckduckgo' | 'bing'; homepage: string; developerMode: boolean; onboardingComplete: boolean; autoHibernateMinutes: number }
-export type QuickLink = { id: string; title: string; url: string }
+export type QuickLink = { id: string; title: string; url: string; favicon?: string }
 export type ExtensionEntry = { id: string; name: string; path: string; enabled: boolean }
 export type Library = { bookmarks: Bookmark[]; history: HistoryEntry[]; downloads: DownloadEntry[]; quickLinks: QuickLink[]; extensions: ExtensionEntry[]; settings: Settings }
 
@@ -44,7 +44,7 @@ function validExtension(value: unknown): value is ExtensionEntry {
 function validQuickLink(value: unknown): value is QuickLink {
   if (!value || typeof value !== 'object') return false
   const item = value as QuickLink
-  return typeof item.id === 'string' && item.id.length > 0 && typeof item.title === 'string' && item.title.trim().length > 0 && item.title.length <= 60 && validFavicon(item.url)
+  return typeof item.id === 'string' && item.id.length > 0 && typeof item.title === 'string' && item.title.trim().length > 0 && item.title.length <= 60 && validFavicon(item.url) && (item.favicon === undefined || validFavicon(item.favicon))
 }
 
 function validBookmark(value: unknown): value is Bookmark {
