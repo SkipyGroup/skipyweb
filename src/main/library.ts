@@ -5,11 +5,11 @@ import path from 'node:path'
 export type Bookmark = { id: string; title: string; url: string; createdAt: number; favicon?: string }
 export type HistoryEntry = { id: string; title: string; url: string; visitedAt: number; favicon?: string }
 export type DownloadEntry = { id: string; name: string; path: string; url: string; received: number; total: number; status: 'progressing' | 'completed' | 'cancelled' | 'interrupted'; startedAt: number }
-export type Settings = { searchEngine: 'google' | 'duckduckgo' | 'bing'; homepage: string }
+export type Settings = { searchEngine: 'google' | 'duckduckgo' | 'bing'; homepage: string; developerMode: boolean }
 export type QuickLink = { id: string; title: string; url: string }
 export type Library = { bookmarks: Bookmark[]; history: HistoryEntry[]; downloads: DownloadEntry[]; quickLinks: QuickLink[]; settings: Settings }
 
-let library: Library = { bookmarks: [], history: [], downloads: [], quickLinks: [], settings: { searchEngine: 'google', homepage: 'skipy' } }
+let library: Library = { bookmarks: [], history: [], downloads: [], quickLinks: [], settings: { searchEngine: 'google', homepage: 'skipy', developerMode: false } }
 let filePath = ''
 let saveTimer: ReturnType<typeof setTimeout> | null = null
 let writeChain: Promise<void> = Promise.resolve()
@@ -29,7 +29,7 @@ export function loadLibrary() {
         history: Array.isArray(record.history) ? record.history.filter(validHistory) : [],
         downloads: Array.isArray(record.downloads) ? record.downloads.filter(validDownload).map((entry: DownloadEntry) => ({ ...entry, status: entry.status === 'progressing' ? 'interrupted' as const : entry.status })) : [],
         quickLinks: Array.isArray(record.quickLinks) ? record.quickLinks.filter(validQuickLink).slice(0, 6) : [],
-        settings: validSettings(record.settings) ? record.settings : { searchEngine: 'google', homepage: 'skipy' },
+        settings: validSettings(record.settings) ? { ...record.settings, developerMode: record.settings.developerMode === true } : { searchEngine: 'google', homepage: 'skipy', developerMode: false },
       }
     }
   } catch { /* A missing or damaged library starts empty. */ }

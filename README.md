@@ -23,7 +23,9 @@ A 64 bites Windows telepítő a `release/Skipy-Browser-Setup-0.1.0-x64.exe` fáj
 
 ## Használat
 
-A címsor webcímeket nyit meg, más szövegre Google-keresést indít. A `Ctrl+T` új lapot nyit, a `Ctrl+W` bezárja az aktív lapot, a `Ctrl+L` kijelöli a címsort. Az `Alt+Balra` és `Alt+Jobbra` a lap előzményeiben lépked. A lapfül középső egérgombbal is bezárható; az utolsó lap bezárása kilép a böngészőből. Az `F12` vagy `Ctrl+Shift+I` külön ablakban nyitja és zárja az aktív oldal fejlesztői eszközeit.
+A címsor webcímeket nyit meg, más szövegre Google-keresést indít. Induláskor és új lap megnyitásakor rögtön a címsor kap fókuszt. A címsor másolásgombja az aktív HTTP(S)-oldal linkjét a vágólapra teszi. A `Ctrl+T` új lapot nyit, a `Ctrl+W` bezárja az aktív lapot, a `Ctrl+L` kijelöli a címsort. Az `Alt+Balra` és `Alt+Jobbra` a lap előzményeiben lépked. A lapfül középső egérgombbal is bezárható; az utolsó lap bezárása kilép a böngészőből. Az `F12` vagy `Ctrl+Shift+I` külön ablakban nyitja és zárja az aktív oldal fejlesztői eszközeit.
+
+A címsori keresési és előzményjavaslatok külön lebegő rétegen jelennek meg a weboldal fölött, ezért gépelés közben nem mozdítják el és nem méretezik át az oldalt.
 
 A címsor melletti csillaggal az aktuális oldal könyvjelzőként menthető vagy eltávolítható. A jobb oldali gombokkal nyithatók meg a weboldal fölé csúszó panelek. Az előzményeknél egyetlen bejegyzés és a teljes lista is törölhető. A letöltések a Windows Letöltések mappájába kerülnek. Indításukkor az ikon felé repülő jelzés látszik, és megnyílik a letöltések lebegő ablaka. Ebben a futás közben indult letöltések megszakíthatók, a kész fájl megmutatható a Fájlkezelőben. Az ablak az ikonról újranyitható; a listából eltávolítás nem törli a fájlt.
 
@@ -32,6 +34,8 @@ A lapfüleken, a könyvjelzőkben és az előzményekben a weboldal ikonja jelen
 A címsori biztonsági ikon az aktív oldal HTTPS-tanúsítványának elérhető adatait mutatja, vagy jelzi a kapcsolat hibáját. A felső sáv Bass Booster gombjával Tiszta, Mély és Erős preset, valamint 0–12 dB erősség és 60–160 Hz basszusfrekvencia állítható be a böngésző összes lapjára. A 0 dB kikapcsolja a feldolgozást; a beállítás az alkalmazás bezárásáig marad meg.
 
 A weboldalon jobb kattintással linkek, képek és médiák nyithatók meg vagy tölthetők le, kijelölt szöveg kereshető, az oldal pedig teljes HTML-változatban menthető. Minden webes letöltés először egy Skipy megerősítő ablakban jelenik meg; csak a Letöltés gomb után indul el és kerül be a letöltési listába.
+
+A Beállítások **I am a developer** kapcsolója engedélyezi az SDT-t. Ezután a felső sáv kódikonjával vagy `Ctrl+Shift+D`-vel nyitható meg a lebegő panel. A színválasztó az aktív oldal egy elemének háttér-, szöveg- és keretszínét mutatja, az API-tesztelő pedig cookie-k átvétele nélkül futtat HTTP(S) kéréseket 20 másodperces és 1 MB-os korláttal. Az UI-tesztek kattintást, szövegbevitelt, várakozást és URL-ellenőrzést rögzítenek. Futtatáskor az első URL-lépés automatikusan megnyílik kezdőpontként, ezért nem kell előre megkeresni vagy megnyitni az oldalt. Egy teszt azonos webhelyen több útvonalon is folytatódhat; az útvonalváltás automatikusan bekerül a lépések közé. A tesztek webhelyenként menthetők, legfeljebb 50 teszt és tesztenként 100 lépés erejéig. Jelszómező értéke nem kerül a felvételbe. Az `F12` és a `Ctrl+Shift+I` továbbra is a Chromium DevTools külön ablakát kezeli.
 
 Az Adatvédelem panel webhelyenként, célhost szerint összesíti a hálózati kéréseket. Egy host letiltható és később feloldható. Az összesített napló újraindítás után is megmarad, de teljes URL-t nem tárol; webhelyenként vagy teljesen törölhető. A tiltási szabályokat a napló törlése nem érinti.
 

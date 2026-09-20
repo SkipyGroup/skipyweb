@@ -1,8 +1,8 @@
 import './style.css'
-import { createIcons, ArrowLeft, ArrowRight, RotateCw, House, Shield, Bookmark, BookOpen, History, Download, SlidersHorizontal, Minus, Square, X, Globe, Search, Grid2X2, Plus, Pencil, Trash2, Copy, Star, Volume2, VolumeX, AudioLines, LockKeyhole, TriangleAlert } from 'lucide'
+import { createIcons, ArrowLeft, ArrowRight, RotateCw, House, Shield, Bookmark, BookOpen, History, Download, SlidersHorizontal, Minus, Square, X, Globe, Search, Grid2X2, Plus, Pencil, Trash2, Copy, Star, Volume2, VolumeX, AudioLines, LockKeyhole, TriangleAlert, CodeXml, PanelsTopLeft, VenetianMask } from 'lucide'
 import { classifyInput } from '../main/input'
 
-const iconSet = { ArrowLeft, ArrowRight, RotateCw, House, Shield, Bookmark, BookOpen, History, Download, SlidersHorizontal, Minus, Square, X, Globe, Search, Grid2X2, Plus, Pencil, Trash2, Copy, Star, Volume2, VolumeX, AudioLines, LockKeyhole, TriangleAlert }
+const iconSet = { ArrowLeft, ArrowRight, RotateCw, House, Shield, Bookmark, BookOpen, History, Download, SlidersHorizontal, Minus, Square, X, Globe, Search, Grid2X2, Plus, Pencil, Trash2, Copy, Star, Volume2, VolumeX, AudioLines, LockKeyhole, TriangleAlert, CodeXml, PanelsTopLeft, VenetianMask }
 function renderIcons() { createIcons({ icons: iconSet, attrs: { 'stroke-width': 2 } }) }
 function icon(name: string) {
   const element = document.createElement('i')
@@ -18,7 +18,7 @@ type HistoryEntry = { id: string; title: string; url: string; visitedAt: number;
 type DownloadEntry = { id: string; name: string; path: string; url: string; received: number; total: number; status: 'progressing' | 'completed' | 'cancelled' | 'interrupted'; startedAt: number }
 type QuickLink = { id: string; title: string; url: string }
 type Privacy = { site: string; protection: 'active' | 'error' | 'pending'; fingerprintEnabled: boolean; blockedHosts: string[]; rows: { site: string; host: string; count: number; blocked: number; lastSeen: number; blockedNow: boolean }[] }
-type State = { activeId: string; globalBassDb: number; globalBassFrequency: number; maximized: boolean; fullscreenMode: 'none' | 'app' | 'video'; tabs: Tab[]; panel: 'bookmarks' | 'history' | 'downloads' | 'settings' | 'privacy' | null; downloadsOpen: boolean; sessionDownloadIds: string[]; pendingDownload: { id: string; filename: string; host: string; total: number } | null; toolPopover: 'certificate' | 'bass' | null; certificate: CertificateState; privacy: Privacy | null; library: { bookmarks: Bookmark[]; history: HistoryEntry[]; downloads: DownloadEntry[]; quickLinks: QuickLink[]; settings: { searchEngine: 'google' | 'duckduckgo' | 'bing'; homepage: string } } }
+type State = { privateMode: boolean; activeId: string; sdtOpen: boolean; globalBassDb: number; globalBassFrequency: number; maximized: boolean; fullscreenMode: 'none' | 'app' | 'video'; tabs: Tab[]; panel: 'bookmarks' | 'history' | 'downloads' | 'settings' | 'privacy' | null; downloadsOpen: boolean; sessionDownloadIds: string[]; pendingDownload: { id: string; filename: string; host: string; total: number } | null; toolPopover: 'certificate' | 'bass' | null; certificate: CertificateState; privacy: Privacy | null; swp: { adblock:boolean; listStatus:'bundled'|'updated'|'error' } | null; library: { bookmarks: Bookmark[]; history: HistoryEntry[]; downloads: DownloadEntry[]; quickLinks: QuickLink[]; settings: { searchEngine: 'google' | 'duckduckgo' | 'bing'; homepage: string; developerMode: boolean } } }
 type BrowserBridge = {
   command: (action: string, value?: string) => Promise<State | string | void>
   onState: (callback: (state: State) => void) => () => void
@@ -38,7 +38,7 @@ if (overlayMode === 'panel' || overlayMode === 'downloads' || overlayMode === 't
 let overlayClosing = false
 let lastOverlayPanel: State['panel'] = null
 const tabElements = new Map<string, HTMLElement>()
-let state: State = { activeId: '', globalBassDb: 0, globalBassFrequency: 95, maximized: false, fullscreenMode: 'none', tabs: [], panel: null, downloadsOpen: false, sessionDownloadIds: [], pendingDownload: null, toolPopover: null, certificate: { status: 'none' }, privacy: null, library: { bookmarks: [], history: [], downloads: [], quickLinks: [], settings: { searchEngine: 'google', homepage: 'skipy' } } }
+let state: State = { privateMode: false, activeId: '', sdtOpen: false, globalBassDb: 0, globalBassFrequency: 95, maximized: false, fullscreenMode: 'none', tabs: [], panel: null, downloadsOpen: false, sessionDownloadIds: [], pendingDownload: null, toolPopover: null, certificate: { status: 'none' }, privacy: null, swp: null, library: { bookmarks: [], history: [], downloads: [], quickLinks: [], settings: { searchEngine: 'google', homepage: 'skipy', developerMode: false } } }
 let homeModeDraft: 'skipy' | 'custom' | null = null
 let homepageDraft: string | null = null
 let settingsError = ''
@@ -47,7 +47,6 @@ let progressKey = ''
 let progressStarted = 0
 let progressTimer: ReturnType<typeof setInterval> | null = null
 let progressFinishTimer: ReturnType<typeof setTimeout> | null = null
-let suggestionsInset = 0
 let lastDownloadButtonBounds = ''
 type Suggestion = { label: string; detail: string; value: string; action: 'navigate' | 'history' }
 const suggestionState = new Map<HTMLInputElement, { rows: Suggestion[]; selected: number }>()
@@ -56,11 +55,6 @@ function command(action: string, value?: string) { void window.browser.command(a
 function focusAddress() { address.focus(); address.select() }
 
 function suggestionMenu(input: HTMLInputElement) { return $(input === address ? 'address-suggestions' : 'home-suggestions') }
-function setSuggestionsInset(value: number) {
-  if (value === suggestionsInset) return
-  suggestionsInset = value
-  command('suggestion-inset', String(value))
-}
 function closeSuggestions(input: HTMLInputElement) {
   const menu = suggestionMenu(input)
   menu.hidden = true
@@ -68,7 +62,7 @@ function closeSuggestions(input: HTMLInputElement) {
   input.setAttribute('aria-expanded', 'false')
   input.removeAttribute('aria-activedescendant')
   suggestionState.delete(input)
-  if (input === address) setSuggestionsInset(0)
+  if (input === address) command('suggestions-close')
 }
 function buildSuggestions(value: string): Suggestion[] {
   const query = value.trim()
@@ -91,6 +85,14 @@ function showSuggestions(input: HTMLInputElement) {
   if (!rows.length || document.activeElement !== input) { closeSuggestions(input); return }
   const selected = Math.min(suggestionState.get(input)?.selected ?? 0, rows.length - 1)
   suggestionState.set(input, { rows, selected })
+  if (input === address) {
+    const bounds = $('address-form').getBoundingClientRect()
+    command('suggestions-open', JSON.stringify({ rows: rows.map(({ label, detail, value }) => ({ label, detail, value })), selected, bounds: { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height } }))
+    menu.hidden = true
+    input.setAttribute('aria-expanded', 'true')
+    input.setAttribute('aria-activedescendant', `address-suggestions-option-${selected}`)
+    return
+  }
   menu.replaceChildren()
   rows.forEach((row, index) => {
     const option = document.createElement('button')
@@ -109,7 +111,6 @@ function showSuggestions(input: HTMLInputElement) {
     menu.append(option)
   })
   menu.hidden = false
-  if (input === address) setSuggestionsInset(Math.min(400, Math.max(0, Math.ceil(menu.getBoundingClientRect().bottom - $('load-progress').getBoundingClientRect().bottom + 8))))
   input.setAttribute('aria-expanded', 'true')
   input.setAttribute('aria-activedescendant', `${menu.id}-option-${selected}`)
 }
@@ -125,7 +126,7 @@ function chooseSuggestion(input: HTMLInputElement, index: number) {
 function wireSuggestions(input: HTMLInputElement) {
   input.addEventListener('input', () => showSuggestions(input))
   input.addEventListener('focus', () => showSuggestions(input))
-  input.addEventListener('blur', () => closeSuggestions(input))
+  input.addEventListener('blur', () => { if (input !== address) closeSuggestions(input) })
   input.addEventListener('keydown', event => {
     const current = suggestionState.get(input)
     if (event.key === 'Escape') { closeSuggestions(input); input.blur(); if (input === address) address.value = state.tabs.find(tab => tab.id === state.activeId)?.url === 'skipy://home' ? '' : state.tabs.find(tab => tab.id === state.activeId)?.url ?? ''; return }
@@ -277,6 +278,19 @@ function settingLabel(label: string, control: HTMLElement) {
 }
 
 function renderSettings(container: HTMLElement) {
+  const developer = document.createElement('label')
+  developer.className = 'developer-setting'
+  const developerToggle = document.createElement('input')
+  developerToggle.type = 'checkbox'
+  developerToggle.checked = !!state.library.settings.developerMode
+  developerToggle.addEventListener('change', () => command('settings-developer', developerToggle.checked ? 'on' : 'off'))
+  const developerLabel = document.createElement('span')
+  developerLabel.textContent = 'I am a developer'
+  const developerHelp = document.createElement('small')
+  developerHelp.textContent = 'SDT · színválasztó, API és UI-tesztek'
+  developerLabel.append(developerHelp)
+  developer.append(developerToggle, developerLabel)
+  container.append(developer)
   const search = document.createElement('select')
   for (const [value, label] of [['google', 'Google'], ['duckduckgo', 'DuckDuckGo'], ['bing', 'Bing']]) {
     const option = document.createElement('option')
@@ -562,6 +576,8 @@ function render(next: State) {
   if (overlayMode === 'download-confirm') { renderDownloadConfirmation(); renderIcons(); return }
   if (overlayMode) { renderPanel(); renderIcons(); return }
   document.body.classList.toggle('fullscreen', state.fullscreenMode !== 'none')
+  document.body.classList.toggle('private-mode', state.privateMode)
+  $('private-indicator').hidden = !state.privateMode
   $('window-maximize').classList.toggle('restored', state.maximized)
   setIcon($('window-maximize'), state.maximized ? 'copy' : 'square')
   $('window-maximize').setAttribute('aria-label', state.maximized ? 'Visszaállítás' : 'Nagyítás')
@@ -574,6 +590,11 @@ function render(next: State) {
   security.classList.toggle('certificate-error', state.certificate.status === 'error')
   security.title = state.certificate.status === 'secure' ? 'Érvényes HTTPS-kapcsolat · részletek' : state.certificate.status === 'error' ? 'Tanúsítványhiba · részletek' : 'Kapcsolat adatai'
   $('show-bass').classList.toggle('bass-active', state.globalBassDb > 0)
+  $('show-sdt').hidden = !state.library.settings.developerMode
+  $('show-sdt').classList.toggle('selected', !!state.sdtOpen)
+  $('show-sdt').setAttribute('aria-pressed', String(!!state.sdtOpen))
+  $('show-privacy').classList.toggle('swp-active', !!state.swp?.adblock)
+  $('show-privacy').classList.toggle('swp-warning', state.swp?.listStatus === 'error' || (!!state.swp && !state.swp.adblock))
   $('show-bass').classList.toggle('selected', state.toolPopover === 'bass')
   const activeChanged = renderedActiveId !== state.activeId
   renderedActiveId = state.activeId
@@ -683,6 +704,7 @@ function render(next: State) {
   setIcon($('bookmark-toggle'), bookmarked ? 'star' : 'bookmark')
   ;($('bookmark-toggle') as HTMLButtonElement).disabled = !active || !/^https?:\/\//i.test(active.url)
   $('bookmark-toggle').title = bookmarked ? 'Könyvjelző eltávolítása' : 'Könyvjelző hozzáadása'
+  ;($('copy-link') as HTMLButtonElement).disabled = !active || !/^https?:\/\//i.test(active.url)
   home.hidden = active?.url !== 'skipy://home'
   renderQuickLinks()
   updateDownloadsButton()
@@ -711,6 +733,7 @@ $('forward').addEventListener('click', () => command('forward'))
 $('reload').addEventListener('click', () => command('reload'))
 $('home').addEventListener('click', () => command('home'))
 $('bookmark-toggle').addEventListener('click', () => command('bookmark-toggle'))
+$('copy-link').addEventListener('click', () => command('copy-current-url'))
 function openTool(kind: 'certificate' | 'bass', element: HTMLElement) {
   const rect = element.getBoundingClientRect()
   command('tool', JSON.stringify({ kind, anchor: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } }))
@@ -721,7 +744,10 @@ $('show-bookmarks').addEventListener('click', () => command('panel', 'bookmarks'
 $('show-history').addEventListener('click', () => command('panel', 'history'))
 $('show-downloads').addEventListener('click', () => command('downloads-toggle'))
 $('show-settings').addEventListener('click', () => command('panel', 'settings'))
+$('show-sdt').addEventListener('click', () => command('sdt-toggle'))
 $('show-privacy').addEventListener('click', () => command('panel', 'privacy'))
+$('new-window').addEventListener('click', () => command('new-window'))
+$('new-private-window').addEventListener('click', () => command('new-private-window'))
 $('panel-close').addEventListener('click', () => command(overlayMode === 'downloads' ? 'downloads-close' : 'panel', overlayMode === 'downloads' ? undefined : 'close'))
 window.addEventListener('resize', updateDownloadsButton)
 $('window-minimize').addEventListener('click', () => command('window-minimize'))
@@ -755,3 +781,6 @@ $('quicklink-form').addEventListener('submit', event => {
 })
 wireSuggestions(address)
 wireSuggestions(homeSearch)
+document.addEventListener('pointerdown', event => {
+  if (suggestionState.has(address) && !$('address-form').contains(event.target as Node)) closeSuggestions(address)
+})

@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="hu">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'" />
+    <title>SDT · Skipy Developer Tools</title>
+  </head>
+  <body>
+    <section id="compact" class="compact-bar" hidden>
+      <span class="record-dot"></span><div><strong id="compact-title"></strong><small id="compact-description"></small></div>
+      <button id="compact-stop" type="button">Leállítás</button>
+    </section>
+    <main id="sdt-panel" class="sdt-panel">
+      <header class="heading"><div class="brand-symbol" aria-hidden="true"><i data-lucide="code-xml"></i></div><div><h1>SDT <span>Developer Tools</span></h1><p id="site-label">Skipy Browser</p></div><button id="close" class="icon-button" type="button" title="Bezárás" aria-label="SDT bezárása"><i data-lucide="x"></i></button></header>
+      <nav class="tool-tabs" role="tablist" aria-label="Fejlesztői eszközök">
+        <button id="tab-colors" role="tab" aria-selected="true" aria-controls="section-colors" data-section="colors"><i data-lucide="pipette"></i>Színek</button>
+        <button id="tab-api" role="tab" aria-selected="false" aria-controls="section-api" data-section="api" tabindex="-1"><i data-lucide="braces"></i>API</button>
+        <button id="tab-tests" role="tab" aria-selected="false" aria-controls="section-tests" data-section="tests" tabindex="-1"><i data-lucide="list-checks"></i>UI-tesztek</button>
+      </nav>
+      <div id="message" class="status-message" role="status" hidden></div>
+      <div class="tool-content">
+        <section id="section-colors" role="tabpanel" aria-labelledby="tab-colors">
+          <div class="section-intro"><h2>HTML color picker</h2><p>Mutass az oldal egy elemére, majd kattints a színeinek kiolvasásához.</p></div>
+          <button id="pick" class="primary wide" type="button"><i data-lucide="pipette"></i>Elem kiválasztása</button>
+          <p id="colors-no-site" class="hint">Nyiss meg egy weboldalt a színválasztó használatához.</p>
+          <div id="selection" hidden><div class="field-caption">Kiválasztott elem</div><code id="selector" class="selector"></code><div id="color-list"></div></div>
+          <div id="color-empty" class="empty-state"><i data-lucide="pipette"></i><strong>Az oldal színei, egy kattintásra</strong><p>Háttér, szöveg és keret · HEX és RGB</p></div>
+        </section>
+        <section id="section-api" role="tabpanel" aria-labelledby="tab-api" hidden>
+          <form id="api-form">
+            <div class="section-intro"><h2>API tesztelő</h2><p>Küldj HTTP-kérést, és vizsgáld meg a választ.</p></div>
+            <div class="request-line"><select id="api-method" aria-label="HTTP-metódus"><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option><option>HEAD</option></select><input id="api-url" type="url" required placeholder="https://api.pelda.hu/" aria-label="API URL" spellcheck="false" /><button id="api-send" class="primary" type="submit" title="Kérés küldése"><i data-lucide="send"></i></button></div>
+            <div class="section-label"><h3>Fejlécek</h3><button id="header-add" class="text-button" type="button">+ Fejléc</button></div>
+            <div id="headers"></div>
+            <div class="section-label"><h3>Kérés törzse</h3><select id="body-type" aria-label="Kérés törzsének típusa"><option value="json">JSON</option><option value="text">Szöveg</option></select></div>
+            <textarea id="api-body" class="code-input" rows="5" spellcheck="false" aria-label="Kérés törzse" placeholder='{ "message": "Hello Skipy" }'></textarea>
+            <p id="body-hint" class="hint">GET és HEAD kéréshez nem küldünk törzset.</p>
+            <div class="request-footer"><span>20 mp időkorlát · max. 1 MB válasz</span><button id="api-cancel" type="button" hidden>Megszakítás</button></div>
+          </form>
+          <section id="api-response" class="api-response" hidden><div class="response-summary"><strong id="response-status"></strong><span id="response-time"></span><span id="response-size"></span></div><p id="response-error" class="error-text" hidden></p><details><summary>Válaszfejlécek</summary><pre id="response-headers"></pre></details><div class="section-label"><h3>Válasz</h3><button id="response-copy" class="text-button" type="button">Másolás</button></div><pre id="response-body" tabindex="0"></pre></section>
+          <p class="hint">A kérés nem használja az oldal cookie-jait vagy bejelentkezését.</p>
+        </section>
+        <section id="section-tests" role="tabpanel" aria-labelledby="tab-tests" hidden>
+          <div class="section-intro"><h2>Automatizált UI-tesztek</h2><p>Futtatáskor a teszt automatikusan megnyitja az első URL-lépést, majd onnan halad végig.</p></div>
+          <div class="saved-row"><select id="saved-tests" aria-label="Mentett tesztek"><option value="">Új teszt</option></select><button id="test-new" type="button" title="Új teszt">Új</button><button id="test-delete" class="icon-button danger" type="button" title="Mentett teszt törlése" aria-label="Mentett teszt törlése" disabled><i data-lucide="trash-2"></i></button></div>
+          <label class="field-label" for="test-name">Teszt neve</label><input id="test-name" class="wide" maxlength="80" placeholder="Például: keresés az oldalon" />
+          <div class="test-actions"><button id="record" type="button"><i data-lucide="circle"></i>Rögzítés</button><button id="run" class="primary" type="button"><i data-lucide="play"></i>Futtatás</button><button id="run-stop" type="button" hidden>Leállítás</button><button id="test-save" type="button"><i data-lucide="save"></i>Mentés</button></div>
+          <p id="tests-no-site" class="hint">A tesztekhez nyiss meg egy weboldalt.</p><p class="hint">Egy teszt azonos webhelyen több útvonalon is folytatódhat. A lapváltás és a másik webhelyre navigálás leállítja. Jelszót nem rögzítünk.</p>
+          <div class="section-label"><h3>Lépések <span id="step-count">0 / 100</span></h3><select id="step-add" aria-label="Lépés hozzáadása"><option value="">+ Lépés</option><option value="click">Kattintás</option><option value="input">Szövegbevitel</option><option value="wait">Várakozás</option><option value="url">URL-ellenőrzés</option></select></div>
+          <ol id="steps" class="steps"></ol><p id="steps-empty" class="empty-state small">Indíts rögzítést, vagy adj hozzá egy lépést.</p>
+        </section>
+      </div>
+      <footer class="panel-footer"><span class="status-dot"></span>Fejlesztői mód aktív<span>Ctrl + Shift + D</span></footer>
+    </main>
+    <script type="module" src="./sdt.ts"></script>
+  </body>
+</html>

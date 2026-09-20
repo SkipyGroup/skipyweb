@@ -17,6 +17,10 @@
         </div>
         <div class="tabs" id="tabs"></div>
         <div class="library-actions">
+          <span id="private-indicator" class="private-indicator" hidden><i data-lucide="venetian-mask"></i><b>INKOGNITÓ</b></span>
+          <button id="new-window" class="tool-action" title="Új ablak (Ctrl+N)" aria-label="Új ablak"><i data-lucide="panels-top-left"></i></button>
+          <button id="new-private-window" class="tool-action" title="Új inkognitó ablak (Ctrl+Shift+N)" aria-label="Új inkognitó ablak"><i data-lucide="venetian-mask"></i></button>
+          <button id="show-sdt" class="tool-action" title="SDT · Skipy Developer Tools (Ctrl+Shift+D)" aria-label="Skipy Developer Tools" aria-pressed="false" hidden><i data-lucide="code-xml"></i></button>
           <button id="show-bass" class="tool-action" title="Bass Booster" aria-label="Bass Booster"><i data-lucide="audio-lines"></i></button>
           <button id="show-privacy" class="tool-action" title="Adatvédelem" aria-label="Adatvédelem"><i data-lucide="shield"></i></button>
           <button id="bookmark-toggle" class="tool-action" title="Könyvjelző hozzáadása" aria-label="Könyvjelző hozzáadása"><i data-lucide="bookmark"></i></button>
@@ -32,7 +36,7 @@
         </div>
       </header>
       <div class="toolbar">
-        <form id="address-form"><button id="site-security" class="site-mark" type="button" title="Kapcsolat adatai" aria-label="Kapcsolat adatai"><i data-lucide="globe"></i></button><input id="address" aria-label="Címsor" spellcheck="false" placeholder="Keress a weben, vagy írj be egy URL-t…" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="address-suggestions" /><button class="address-submit" type="submit" title="Megnyitás" aria-label="Megnyitás"><i data-lucide="arrow-right"></i></button><div id="address-suggestions" class="suggestions" role="listbox" hidden></div></form>
+        <form id="address-form"><button id="site-security" class="site-mark" type="button" title="Kapcsolat adatai" aria-label="Kapcsolat adatai"><i data-lucide="globe"></i></button><input id="address" aria-label="Címsor" spellcheck="false" placeholder="Keress a weben, vagy írj be egy URL-t…" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="address-suggestions" /><button id="copy-link" class="address-action" type="button" title="Link másolása" aria-label="Aktív oldal linkjének másolása"><i data-lucide="copy"></i></button><button class="address-submit" type="submit" title="Megnyitás" aria-label="Megnyitás"><i data-lucide="arrow-right"></i></button><div id="address-suggestions" class="suggestions" role="listbox" hidden></div></form>
         <div id="load-progress" class="load-progress" role="progressbar" aria-label="Oldal betöltése" hidden><div id="load-progress-fill"></div></div>
       </div>
       <main id="home-screen" class="home-screen">

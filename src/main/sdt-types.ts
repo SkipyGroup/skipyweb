@@ -1,0 +1,9 @@
+export type SdtStep = { id: string; kind: 'click' | 'input' | 'wait' | 'url'; selector?: string; x?: number; y?: number; value?: string; ms?: number }
+export type SdtTest = { id: string; site: string; name: string; steps: SdtStep[]; updatedAt: number }
+export type SdtColor = { label: string; css: string; hex: string | null; rgb: string | null }
+export type SdtSelection = { selector: string; colors: SdtColor[] }
+export type SdtApiRequest = { url: string; method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD'; headers: { name: string; value: string }[]; body: string; bodyType: 'json' | 'text' }
+export type SdtApiResult = { status: number; statusText: string; elapsedMs: number; headers: { name: string; value: string }[]; body: string; bytes: number; error?: string }
+export type SdtStepResult = { id: string; status: 'running' | 'passed' | 'failed' | 'cancelled'; message?: string }
+export type SdtState = { enabled: boolean; open: boolean; tabId: string | null; site: string | null; url: string; mode: 'idle' | 'picking' | 'recording' | 'running'; selection: SdtSelection | null; draft: SdtStep[]; tests: SdtTest[]; results: SdtStepResult[]; apiRunning: boolean; apiResult: SdtApiResult | null; message: string }
+export type SdtReply = { ok: boolean; error?: string }

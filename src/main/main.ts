@@ -1,17 +1,28 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, net, session, shell, WebContentsView, type MenuItemConstructorOptions } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
+import { spawn } from 'node:child_process'
 import { createHmac } from 'node:crypto'
 import { resolveInput as resolveAddress } from './input'
 import { flushLibrary, getLibrary, id, loadLibrary, saveLibrary, validFavicon, type DownloadEntry } from './library'
 import { clearRequests, flushPrivacy, hostForUrl, isBlocked, isFingerprintEnabled, loadPrivacy, recordRequest, requestSummary, secret, setFingerprintEnabled, siteForUrl, toggleBlock } from './privacy'
+import { adblockEnabled, clearOnExit, cosmeticCss, flushSwp, isAdRequest, loadSwp, permissionFor, popupFor, recordAdBlocked, recordPopupBlocked, setPermission, setPopup, swpData, toggleAdblock, toggleClearOnExit, updateLists, type SwpPermission } from './swp'
+import { SdtService } from './sdt'
 
 const TOOLBAR_HEIGHT = 94
 const PANEL_WIDTH = 350
 const HOME_URL = 'skipy://home'
-const userDataPath = path.join(app.getPath('appData'), 'skipy-browser')
+const privateMode = process.argv.includes('--skipy-private')
+const windowArgument = process.argv.find(argument => argument.startsWith('--skipy-window='))
+const windowToken = windowArgument?.slice('--skipy-window='.length).replace(/[^a-zA-Z0-9_-]/g, '') || ''
+const privateRoot = privateMode ? path.join(app.getPath('temp'), `skipy-private-${windowToken || process.pid}`) : ''
+const userDataPath = privateMode ? path.join(privateRoot, 'profile') : path.join(app.getPath('appData'), 'skipy-browser')
 const localDataRoot = process.env.LOCALAPPDATA || path.resolve(app.getPath('appData'), '..', 'Local')
-let sessionDataPath = path.join(localDataRoot, 'skipy-browser', 'session')
+let sessionDataPath = privateMode
+  ? path.join(privateRoot, 'session')
+  : windowToken
+    ? path.join(localDataRoot, 'skipy-browser', `session-${windowToken}`)
+    : path.join(localDataRoot, 'skipy-browser', 'session')
 try { fs.mkdirSync(sessionDataPath, { recursive: true }) }
 catch {
   sessionDataPath = path.join(app.getPath('temp'), 'skipy-browser-session')
@@ -20,7 +31,7 @@ catch {
 app.setPath('userData', userDataPath)
 app.setPath('sessionData', sessionDataPath)
 app.commandLine.appendSwitch('disk-cache-dir', path.join(sessionDataPath, 'Cache'))
-const hasSingleInstanceLock = app.requestSingleInstanceLock()
+const hasSingleInstanceLock = windowToken ? true : app.requestSingleInstanceLock()
 if (!hasSingleInstanceLock) app.quit()
 type CertificateState = { status: 'none' | 'loading' | 'secure' | 'error' | 'unavailable'; host?: string; subject?: string; issuer?: string; validFrom?: number; validTo?: number; protocol?: string; cipher?: string; error?: string }
 type Tab = { id: string; view: WebContentsView | null; title: string; url: string; favicon: string | null; loading: boolean; loadEpoch: number; audible: boolean; muted: boolean; bassDb: number; bassStatus: 'off' | 'starting' | 'active' | 'error'; audioView: WebContentsView | null; certificate: CertificateState; certCandidates: Map<string, CertificateState>; certReady: Promise<void> | null; error: string | null; site: string | null; protection: 'active' | 'error' | 'pending'; closing: boolean }
@@ -30,16 +41,19 @@ let activeId = ''
 let globalBassDb = 0
 let globalBassFrequency = 95
 let window: BrowserWindow
+let sdt: SdtService | null = null
 let nextId = 1
 let panel: 'bookmarks' | 'history' | 'downloads' | 'settings' | 'privacy' | null = null
 let panelView: WebContentsView | null = null
 let downloadsView: WebContentsView | null = null
 let downloadConfirmView: WebContentsView | null = null
 let jsDialogView: WebContentsView | null = null
+let swpPromptView: WebContentsView | null = null
 let panelAttached = false
 let downloadsAttached = false
 let downloadConfirmAttached = false
 let jsDialogAttached = false
+let swpPromptAttached = false
 let panelRemoveTimer: ReturnType<typeof setTimeout> | null = null
 let popupTimer: ReturnType<typeof setTimeout> | null = null
 let downloadsOpen = false
@@ -47,11 +61,16 @@ let toolPopover: 'certificate' | 'bass' | null = null
 let toolView: WebContentsView | null = null
 let toolAttached = false
 let toolAnchor = { x: 0, y: 0, width: 24, height: 24 }
+let toolContentHeight = 150
 const sessionDownloadIds = new Set<string>()
 let downloadsButton = { x: 0, y: 0, width: 28, height: 29 }
 let flightWindow: BrowserWindow | null = null
 const recentClicks = new Map<number, { x: number; y: number; at: number }>()
-let suggestionsInset = 0
+type SuggestionRow = { label: string; detail: string; value: string }
+let suggestionsView: WebContentsView | null = null
+let suggestionsAttached = false
+let suggestionsReady = false
+let suggestionsPopup: { rows: SuggestionRow[]; selected: number; bounds: Electron.Rectangle } | null = null
 let appFullscreen = false
 let videoFullscreenTabId: string | null = null
 let transitionView: WebContentsView | null = null
@@ -69,6 +88,11 @@ type PendingDownload = { id: string; item: Electron.DownloadItem; contents: Elec
 const pendingDownloads: PendingDownload[] = []
 type JsDialog = { id: string; tabId: string; type: 'alert' | 'confirm' | 'prompt' | 'beforeunload'; message: string; defaultPrompt: string; host: string }
 let pendingJsDialog: JsDialog | null = null
+type SwpPrompt = { id: string; kind: 'permission' | 'popup' | 'clear-data'; site: string; permission?: SwpPermission; target?: string; tabId: string; callback?: (allow: boolean) => void }
+const swpPrompts: SwpPrompt[] = []
+const oncePermissions = new Map<string, Set<SwpPermission>>()
+const blockedAdsBySite = new Map<string, number>()
+const storageBySite = new Map<string, { cookies: number; bytes: number }>()
 const lastViewBounds = new WeakMap<WebContentsView, Electron.Rectangle>()
 let networkPublishTimer: ReturnType<typeof setTimeout> | null = null
 let framePublishTimer: ReturnType<typeof setTimeout> | null = null
@@ -80,7 +104,9 @@ function publishSoon() {
 
 function publicState() {
   return {
+    privateMode,
     activeId,
+    sdtOpen: sdt?.isOpen ?? false,
     maximized: window?.isMaximized() ?? false,
     fullscreenMode: videoFullscreenTabId ? 'video' : appFullscreen ? 'app' : 'none',
     panel,
@@ -92,6 +118,8 @@ function publicState() {
     sessionDownloadIds: [...sessionDownloadIds],
     pendingDownload: pendingDownloads[0] ? { id: pendingDownloads[0].id, filename: pendingDownloads[0].filename, host: pendingDownloads[0].host, total: pendingDownloads[0].total } : null,
     jsDialog: pendingJsDialog,
+    swpPrompt: swpPrompts[0] ? { id: swpPrompts[0].id, kind: swpPrompts[0].kind, site: swpPrompts[0].site, permission: swpPrompts[0].permission, target: swpPrompts[0].target } : null,
+    swp: current()?.site ? { site: current()!.site!, adblock: adblockEnabled(current()!.site!), blockedSite: blockedAdsBySite.get(current()!.site!) ?? 0, blockedTotal: swpData().blockedTotal, popupBlockedTotal: swpData().popupBlockedTotal, listUpdatedAt: swpData().listUpdatedAt, listStatus: swpData().listStatus, permissions: swpData().permissions[current()!.site!] ?? {}, popup: popupFor(current()!.site!), clearOnExit: clearOnExit(current()!.site!), storage: storageBySite.get(current()!.site!) ?? { cookies: 0, bytes: 0 } } : null,
     library: getLibrary(),
     privacy: null,
     tabs: tabs.map(({ id, title, url, favicon, loading, loadEpoch, audible, muted, bassDb, bassStatus, error, closing, view }) => ({
@@ -115,6 +143,8 @@ function stateFor(contents: Electron.WebContents) {
   if (contents === toolView?.webContents) return { ...state, library: { bookmarks: [], history: [], downloads: [], quickLinks: [], settings: library.settings }, privacy: null }
   if (contents === downloadConfirmView?.webContents) return { ...state, tabs: [], library: { bookmarks: [], history: [], downloads: [], quickLinks: [], settings: library.settings }, privacy: null }
   if (contents === jsDialogView?.webContents) return { ...state, tabs: [], library: { bookmarks: [], history: [], downloads: [], quickLinks: [], settings: library.settings }, privacy: null }
+  if (contents === swpPromptView?.webContents) return { ...state, tabs: [], library: { bookmarks: [], history: [], downloads: [], quickLinks: [], settings: library.settings }, privacy: null }
+  if (contents === suggestionsView?.webContents) return { suggestionsPopup }
   return state
 }
 
@@ -129,8 +159,9 @@ function sendState(contents: Electron.WebContents) {
 
 function publishNow() {
   if (!window || window.isDestroyed()) return
+  sdt?.layout()
   sendState(window.webContents)
-  for (const view of [panelView, downloadsView, toolView, downloadConfirmView, jsDialogView]) if (view) sendState(view.webContents)
+  for (const view of [panelView, downloadsView, toolView, downloadConfirmView, jsDialogView, swpPromptView, suggestionsView]) if (view) sendState(view.webContents)
 }
 
 function current() { return tabs.find(tab => tab.id === activeId) }
@@ -164,10 +195,11 @@ function removeNotice() {
   if (noticeTimer) clearTimeout(noticeTimer)
   noticeTimer = null
   activeNoticeMessage = ''
-  if (noticeView) {
-    if (noticeAttached && window && !window.isDestroyed()) window.contentView.removeChildView(noticeView)
-    if (!noticeView.webContents.isDestroyed()) noticeView.webContents.close()
-    noticeView = null
+  const view = noticeView
+  noticeView = null
+  if (view) {
+    if (noticeAttached && window && !window.isDestroyed()) window.contentView.removeChildView(view)
+    if (!view.webContents.isDestroyed()) view.webContents.close()
     noticeAttached = false
   }
   showNextNotice()
@@ -256,12 +288,13 @@ function layout() {
     if (panelView && panelAttached) { window.contentView.removeChildView(panelView); panelAttached = false }
     if (downloadsView && downloadsAttached) { window.contentView.removeChildView(downloadsView); downloadsAttached = false }
     if (toolView && toolAttached) { window.contentView.removeChildView(toolView); toolAttached = false }
+    if (suggestionsView && suggestionsAttached) { window.contentView.removeChildView(suggestionsView); suggestionsAttached = false; suggestionsPopup = null }
   } else {
     if (panel && panelView && !panelAttached && !panelView.webContents.isLoadingMainFrame()) { window.contentView.addChildView(panelView); panelAttached = true }
     if (downloadsOpen && downloadsView && !downloadsAttached && !downloadsView.webContents.isLoadingMainFrame()) { window.contentView.addChildView(downloadsView); downloadsAttached = true }
     if (toolPopover && toolView && !toolAttached && !toolView.webContents.isLoadingMainFrame()) { window.contentView.addChildView(toolView); toolAttached = true }
   }
-  const top = full ? 0 : TOOLBAR_HEIGHT + suggestionsInset
+  const top = full ? 0 : TOOLBAR_HEIGHT
   for (const tab of tabs) {
     if (tab.view && tab.id === activeId) {
       setViewBounds(tab.view, { x: 0, y: top, width: Math.max(0, width), height: Math.max(0, height - top) })
@@ -272,12 +305,19 @@ function layout() {
   if (downloadsView) setViewBounds(downloadsView, { x: Math.max(0, Math.min(width - 330, Math.round(downloadsButton.x + downloadsButton.width - 330))), y: 42, width: Math.min(330, width), height: Math.min(420, Math.max(0, height - 42)) })
   if (downloadConfirmView) setViewBounds(downloadConfirmView, { x: 0, y: 0, width, height })
   if (jsDialogView) setViewBounds(jsDialogView, { x: 0, y: 0, width, height })
+  if (swpPromptView) setViewBounds(swpPromptView, { x: 0, y: 0, width, height })
+  if (suggestionsView && suggestionsPopup) setViewBounds(suggestionsView, suggestionsPopup.bounds)
   if (toolView) {
-    const y = Math.max(42, Math.min(height - 150, Math.round(toolAnchor.y + toolAnchor.height + 6)))
-    setViewBounds(toolView, { x: Math.max(0, Math.min(width - 340, Math.round(toolAnchor.x))), y, width: Math.min(340, width), height: Math.min(toolPopover === 'certificate' ? 350 : 310, Math.max(0, height - y - 8)) })
+    const margin = 8
+    const popoverWidth = Math.max(0, Math.min(340, width - margin * 2))
+    const preferredY = Math.round(toolAnchor.y + toolAnchor.height + 6)
+    const y = Math.max(42, Math.min(Math.max(42, height - 150), preferredY))
+    const x = Math.max(margin, Math.min(Math.max(margin, width - popoverWidth - margin), Math.round(toolAnchor.x)))
+    setViewBounds(toolView, { x, y, width: popoverWidth, height: Math.min(toolContentHeight, Math.max(0, height - y - margin)) })
   }
   for (const tab of tabs) if (tab.audioView) setViewBounds(tab.audioView, { x: Math.max(0, width - 1), y: Math.max(0, height - 1), width: 1, height: 1 })
   if (noticeView) setViewBounds(noticeView, { x: Math.max(0, Math.floor((width - 420) / 2)), y: Math.max(0, height - 103), width: Math.min(420, width), height: 64 })
+  sdt?.layout()
 }
 
 function overlayView(kind: 'panel' | 'downloads') {
@@ -289,6 +329,40 @@ function overlayView(kind: 'panel' | 'downloads') {
   })
   void view.webContents.loadFile(path.join(__dirname, '..', 'dist', 'overlay.html'), { query: { overlay: kind } })
   return view
+}
+
+function closeSuggestions() {
+  suggestionsPopup = null
+  if (suggestionsView && suggestionsAttached && !window.isDestroyed()) window.contentView.removeChildView(suggestionsView)
+  suggestionsAttached = false
+  publish()
+}
+
+function ensureSuggestionsView() {
+  if (suggestionsView) return
+  const view = new WebContentsView({ webPreferences: { preload: path.join(__dirname, 'preload.js'), nodeIntegration: false, contextIsolation: true, sandbox: true } })
+  suggestionsView = view
+  view.setBackgroundColor('#00000000')
+  view.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  view.webContents.on('will-navigate', event => event.preventDefault())
+  view.webContents.on('did-finish-load', () => {
+    suggestionsReady = true
+    if (suggestionsPopup && !suggestionsAttached) { window.contentView.addChildView(view); suggestionsAttached = true; layout() }
+    publish()
+  })
+  void view.webContents.loadFile(path.join(__dirname, '..', 'dist', 'suggestions.html'))
+}
+
+function showSuggestions(rows: SuggestionRow[], selected: number, rawBounds: Electron.Rectangle) {
+  const [windowWidth, windowHeight] = window.getContentSize()
+  const x = Math.max(0, Math.min(windowWidth - 180, Math.round(rawBounds.x)))
+  const y = Math.max(TOOLBAR_HEIGHT, Math.round(rawBounds.y + rawBounds.height + 6))
+  const width = Math.max(180, Math.min(Math.round(rawBounds.width), windowWidth - x))
+  const height = Math.max(46, Math.min(rows.length * 42 + 12, 340, windowHeight - y - 8))
+  suggestionsPopup = { rows, selected: Math.max(0, Math.min(selected, rows.length - 1)), bounds: { x, y, width, height } }
+  ensureSuggestionsView()
+  if (suggestionsView && suggestionsReady && !suggestionsAttached) { window.contentView.addChildView(suggestionsView); suggestionsAttached = true }
+  layout(); publish()
 }
 
 function showOverlay(kind: 'panel' | 'downloads') {
@@ -330,6 +404,7 @@ function setToolPopover(kind: 'certificate' | 'bass' | null, anchor?: { x: numbe
   toolPopover = toolPopover === kind ? null : kind
   if (anchor) toolAnchor = anchor
   if (toolPopover) {
+    toolContentHeight = toolPopover === 'certificate' ? 150 : 280
     ensureToolView()
   } else if (toolView && toolAttached) {
     window.contentView.removeChildView(toolView)
@@ -399,8 +474,10 @@ function showTab(id: string) {
   const previous = current()
   if (previous?.view) window.contentView.removeChildView(previous.view)
   activeId = id
+  sdt?.bind()
   if (toolPopover) { toolPopover = null; if (toolView && toolAttached) { window.contentView.removeChildView(toolView); toolAttached = false } }
   if (next.view) window.contentView.addChildView(next.view)
+  sdt?.pageAttached()
   for (const [overlay, attached] of [[panelView, panelAttached], [downloadsView, downloadsAttached], [toolView, toolAttached]] as const) if (overlay && attached) { window.contentView.removeChildView(overlay); window.contentView.addChildView(overlay) }
   layout()
   publish()
@@ -416,7 +493,10 @@ function loadPage(tab: Tab, url: string) {
   const view = tab.view
   void (async () => {
     await Promise.race([tab.certReady ?? Promise.resolve(), new Promise<void>(resolve => setTimeout(resolve, 1500))])
-    if (tab.view === view && !view.webContents.isDestroyed()) await view.webContents.loadURL(url).catch(() => undefined)
+    if (tab.view === view) {
+      const contents = view.webContents
+      if (contents && !contents.isDestroyed()) await contents.loadURL(url).catch(() => undefined)
+    }
   })()
 }
 
@@ -428,7 +508,9 @@ function monitorRequests() {
     if (details.resourceType === 'mainFrame') tab.site = siteForUrl(details.url)
     const site = tab.site
     if (!site) { callback({}); return }
-    const blocked = isBlocked(site, host)
+    const adBlocked = isAdRequest(site, host)
+    const blocked = adBlocked || isBlocked(site, host)
+    if (adBlocked) { blockedAdsBySite.set(site, (blockedAdsBySite.get(site) ?? 0) + 1); recordAdBlocked() }
     recordRequest(site, host, blocked)
     if (tab.id === activeId) publishSoon()
     callback({ cancel: blocked })
@@ -618,19 +700,31 @@ function attachPage(tab: Tab) {
   attachContextMenu(tab, wc)
   monitorCertificate(tab, wc)
   wc.on('input-event', (_event, input) => {
+    if (input.type === 'mouseDown') closeSuggestions()
     if (input.type === 'mouseUp' && 'x' in input && 'y' in input && typeof input.x === 'number' && typeof input.y === 'number') recentClicks.set(wc.id, { x: input.x, y: input.y, at: Date.now() })
   })
   wc.on('audio-state-changed', event => { tab.audible = event.audible; publish() })
-  wc.setWindowOpenHandler(({ url }) => {
-    if (/^https?:\/\//i.test(url)) setImmediate(() => createTab(url))
+  wc.setWindowOpenHandler(({ url, disposition }) => {
+    if (!/^https?:\/\//i.test(url)) return { action: 'deny' }
+    const site = tab.site || siteForUrl(wc.getURL())
+    if (!site) return { action: 'deny' }
+    const directTab = disposition === 'foreground-tab' || disposition === 'background-tab'
+    const click = recentClicks.get(wc.id)
+    const userTriggered = !!click && Date.now() - click.at < 1200
+    const rule = popupFor(site)
+    if (directTab || userTriggered || rule === 'allow') setImmediate(() => createTab(url, disposition !== 'background-tab'))
+    else if (rule !== 'block') { swpPrompts.push({ id: id(), kind: 'popup', site, target: url, tabId: tab.id }); syncSwpPrompt() }
+    else recordPopupBlocked()
     return { action: 'deny' }
   })
   wc.on('will-navigate', (event, url) => {
     if (!/^https?:\/\//i.test(url)) event.preventDefault()
   })
   wc.on('did-start-navigation', details => {
+    if (details.isMainFrame) sdt?.documentNavigation(tab.id)
     if (showingErrorPage && !details.url.startsWith('data:text/html')) showingErrorPage = false
     if (details.isMainFrame && !details.isSameDocument) {
+      if (tab.site) oncePermissions.delete(`${tab.id}:${tab.site}`)
       tab.favicon = null; tab.site = siteForUrl(details.url)
       tab.certCandidates.clear(); tab.certificate = certificateForUrl(details.url)
       if (tab.audioView) stopBass(tab, false)
@@ -642,17 +736,21 @@ function attachPage(tab: Tab) {
   wc.on('did-navigate', (_event, url) => { if (showingErrorPage && url.startsWith('data:text/html')) return; tab.url = url; tab.site = siteForUrl(url); tab.certificate = tab.certCandidates.get(certificateKey(url)) ?? certificateForUrl(url); publish() })
   wc.on('did-navigate-in-page', (_event, url) => { tab.url = url; publish() })
   wc.on('did-finish-load', () => {
+    if (tab.id === activeId) sdt?.bind()
     if (tab.certificate.status === 'loading') { tab.certificate = { status: 'unavailable', host: /^https:\/\//i.test(wc.getURL()) ? new URL(wc.getURL()).host : undefined }; publish() }
     if (tab.bassDb > 0 && !tab.audioView && !tab.error) startBass(tab)
     if (tab.protection === 'pending') setTimeout(() => { if (tab.protection === 'pending') { tab.protection = 'error'; publish() } }, 150)
     if (tab.error || !/^https?:\/\//i.test(wc.getURL())) return
+    if (tab.site && adblockEnabled(tab.site)) void wc.insertCSS(cosmeticCss(), { cssOrigin: 'user' }).catch(() => undefined)
     const url = wc.getURL()
     const title = wc.getTitle() || url
     tab.url = url
-    const history = getLibrary().history
-    history.unshift({ id: id(), title, url, visitedAt: Date.now(), ...(tab.favicon ? { favicon: tab.favicon } : {}) })
-    if (history.length > 1000) history.length = 1000
-    saveLibrary()
+    if (!privateMode) {
+      const history = getLibrary().history
+      history.unshift({ id: id(), title, url, visitedAt: Date.now(), ...(tab.favicon ? { favicon: tab.favicon } : {}) })
+      if (history.length > 1000) history.length = 1000
+      saveLibrary()
+    }
     publish()
   })
   wc.on('page-title-updated', (_event, title) => { tab.title = title || 'Új lap'; publish() })
@@ -690,9 +788,13 @@ function attachPage(tab: Tab) {
     if (isMainFrame) { tab.certificate = { status: 'error', host: /^https:\/\//i.test(url) ? new URL(url).host : undefined, error }; publish() }
   })
   wc.on('before-input-event', (event, input) => handleShortcut(input, event))
+  wc.on('did-navigate-in-page', () => { if (tab.id === activeId) sdt?.bind() })
+  wc.on('render-process-gone', () => sdt?.navigation(tab.id))
+  wc.on('destroyed', () => sdt?.navigation(tab.id))
   wc.on('enter-html-full-screen', () => {
     if (tab.id !== activeId) return
     videoFullscreenTabId = tab.id
+    sdt?.close()
     if (noticeView) removeNotice()
     transitionTo(true)
     layout(); publish()
@@ -714,12 +816,14 @@ function createTab(input = configuredHome(), activate = true) {
   }
   if (activate || !activeId) showTab(tab.id)
   else publish()
+  if (activate && window && !window.isDestroyed()) setTimeout(() => window.webContents.send('browser:focus-address'), 0)
   return tab
 }
 
 function navigate(input: string) {
   const tab = current()
   if (!tab) return
+  sdt?.navigation(tab.id)
   const url = resolveInput(input)
   tab.error = null
   if (url === HOME_URL) {
@@ -730,6 +834,7 @@ function navigate(input: string) {
       tab.view = null
     }
     tab.title = 'Új lap'; tab.url = HOME_URL; tab.favicon = null; tab.loading = false; tab.audible = false; tab.muted = false; tab.site = null; tab.protection = 'pending'
+    sdt?.bind()
     publish()
     return
   }
@@ -744,6 +849,7 @@ function navigate(input: string) {
 function closeTab(id: string) {
   const tab = tabs.find(item => item.id === id)
   if (!tab || tab.closing) return
+  sdt?.navigation(id)
   tab.closing = true
   closeTimers.set(id, setTimeout(() => finishCloseTab(id), 360))
   publish()
@@ -756,6 +862,9 @@ function finishCloseTab(id: string) {
   if (timer) clearTimeout(timer)
   closeTimers.delete(id)
   const [tab] = tabs.splice(index, 1)
+  for (let i = swpPrompts.length - 1; i >= 0; i--) if (swpPrompts[i].tabId === id) { swpPrompts[i].callback?.(false); swpPrompts.splice(i, 1) }
+  oncePermissions.delete(`${id}:${tab.site ?? ''}`)
+  syncSwpPrompt()
   if (pendingJsDialog?.tabId === id) { pendingJsDialog = null; syncJsDialog() }
   stopBass(tab, true)
   if (tab.view) {
@@ -783,14 +892,27 @@ function handleShortcut(input: Electron.Input, event?: { preventDefault(): void 
   if (input.type !== 'keyDown') return
   const ctrl = input.control || input.meta
   const key = input.key.toLowerCase()
-  if (key === 'f12' || (ctrl && input.shift && key === 'i')) {
+  if (ctrl && input.shift && key === 'n') {
+    event?.preventDefault()
+    launchBrowserWindow(true)
+  }
+  else if (ctrl && key === 'n') {
+    event?.preventDefault()
+    launchBrowserWindow(false)
+  }
+  else if (key === 'f12' || (ctrl && input.shift && key === 'i')) {
     event?.preventDefault()
     toggleDevTools()
+  }
+  else if (ctrl && input.shift && key === 'd' && getLibrary().settings.developerMode) {
+    event?.preventDefault()
+    sdt?.toggle()
   }
   else if (key === 'f11') {
     if (videoFullscreenTabId) return
     event?.preventDefault()
     appFullscreen = !appFullscreen
+    if (appFullscreen) sdt?.close()
     window.setFullScreen(appFullscreen)
     layout(); publish()
   }
@@ -807,6 +929,18 @@ function handleShortcut(input: Electron.Input, event?: { preventDefault(): void 
   else if (input.alt && key === 'left') current()?.view?.webContents.navigationHistory.goBack()
   else if (input.alt && key === 'right') current()?.view?.webContents.navigationHistory.goForward()
   else if (ctrl && key === 'r') current()?.view?.webContents.reload()
+}
+
+function launchBrowserWindow(isPrivate: boolean) {
+  const token = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  const flags = [`--skipy-window=${token}`, ...(isPrivate ? ['--skipy-private'] : [])]
+  const args = app.isPackaged ? flags : [app.getAppPath(), ...flags]
+  try {
+    const child = spawn(process.execPath, args, { detached: true, stdio: 'ignore', windowsHide: false })
+    child.unref()
+  } catch {
+    notice('Az új böngészőablak nem indítható el.', 'error')
+  }
 }
 
 function toggleBookmark() {
@@ -881,6 +1015,61 @@ function answerJsDialog(dialogId: string, accept: boolean, promptText = '') {
   void tab.view.webContents.debugger.sendCommand('Page.handleJavaScriptDialog', { accept, ...(pending.type === 'prompt' && accept ? { promptText: promptText.slice(0, 2000) } : {}) }).catch(() => undefined)
 }
 
+function ensureSwpPromptView() {
+  if (swpPromptView) return
+  swpPromptView = new WebContentsView({ webPreferences: { preload: path.join(__dirname, 'preload.js'), nodeIntegration: false, contextIsolation: true, sandbox: true } })
+  swpPromptView.setBackgroundColor('#00000000')
+  swpPromptView.webContents.on('did-finish-load', () => { if (swpPrompts.length) syncSwpPrompt(); publish() })
+  void swpPromptView.webContents.loadFile(path.join(__dirname, '..', 'dist', 'overlay.html'), { query: { overlay: 'swp-prompt' } })
+}
+function syncSwpPrompt() {
+  if (!swpPrompts.length) {
+    if (swpPromptView && swpPromptAttached) { window.contentView.removeChildView(swpPromptView); swpPromptAttached = false }
+    publish(); return
+  }
+  ensureSwpPromptView()
+  if (swpPromptView && !swpPromptAttached && !swpPromptView.webContents.isLoadingMainFrame()) { window.contentView.addChildView(swpPromptView); swpPromptAttached = true; layout() }
+  publish()
+}
+function answerSwpPrompt(promptId: string, decision: 'once' | 'always-allow' | 'always-block' | 'deny') {
+  const index = swpPrompts.findIndex(item => item.id === promptId); if (index < 0) return
+  const [prompt] = swpPrompts.splice(index, 1)
+  const allow = decision === 'once' || decision === 'always-allow'
+  if (prompt.kind === 'permission' && prompt.permission) {
+    if (decision === 'always-allow') setPermission(prompt.site, prompt.permission, 'allow')
+    else if (decision === 'always-block') setPermission(prompt.site, prompt.permission, 'block')
+    else if (decision === 'once') { const key = `${prompt.tabId}:${prompt.site}`; oncePermissions.get(key)?.add(prompt.permission) ?? oncePermissions.set(key, new Set([prompt.permission])) }
+    prompt.callback?.(allow)
+  } else if (prompt.kind === 'popup') {
+    if (decision === 'always-allow') setPopup(prompt.site, 'allow')
+    else if (decision === 'always-block') setPopup(prompt.site, 'block')
+    if (allow && prompt.target) createTab(prompt.target, false)
+    else if (!allow) recordPopupBlocked()
+  } else {
+    prompt.callback?.(allow)
+  }
+  syncSwpPrompt()
+}
+async function refreshSiteStorage(site: string) {
+  const tab = tabs.find(item => item.site === site && item.view)
+  if (!tab?.view) return
+  let cookies = 0, bytes = 0
+  try { cookies = (await session.defaultSession.cookies.get({ domain: site })).length } catch { /* Keep zero. */ }
+  try {
+    const origin = new URL(tab.url).origin
+    const result = await tab.view.webContents.debugger.sendCommand('Storage.getUsageAndQuota', { origin })
+    bytes = typeof result?.usage === 'number' ? result.usage : 0
+  } catch { /* Quota details are optional. */ }
+  storageBySite.set(site, { cookies, bytes }); publish()
+}
+async function clearSiteData(site: string) {
+  const tab = tabs.find(item => item.site === site)
+  if (!tab) return
+  const origin = new URL(tab.url).origin
+  await session.defaultSession.clearStorageData({ origin, storages: ['cookies', 'filesystem', 'indexdb', 'localstorage', 'shadercache', 'serviceworkers', 'cachestorage'] })
+  storageBySite.set(site, { cookies: 0, bytes: 0 }); publish()
+}
+
 function activateDownload(pending: PendingDownload) {
   const { item } = pending
   const savePath = uniqueDownloadPath(pending.filename)
@@ -938,6 +1127,8 @@ function trackDownloads() {
 if (hasSingleInstanceLock) void app.whenReady().then(() => {
   loadLibrary()
   loadPrivacy()
+  loadSwp()
+  void updateLists().then(() => publish())
   ipcMain.on('privacy:fingerprint-config', event => {
     const tab = tabs.find(item => item.view?.webContents.id === event.sender.id)
     const site = tab?.site || siteForUrl(event.sender.getURL())
@@ -971,25 +1162,57 @@ if (hasSingleInstanceLock) void app.whenReady().then(() => {
     if (!request.frame || !tab || !source || !request.audioRequested || !request.videoRequested) { callback({}); return }
     callback({ video: source, audio: source, enableLocalEcho: false })
   })
-  session.defaultSession.setPermissionRequestHandler((contents, permission, callback) => callback(permission === 'fullscreen' && isBrowserTab(contents) || (permission === 'display-capture' || permission === 'media') && isAudioProcessor(contents)))
-  session.defaultSession.setPermissionCheckHandler((contents, permission) => permission === 'fullscreen' && isBrowserTab(contents) || (permission === 'display-capture' || permission === 'media') && isAudioProcessor(contents))
+  session.defaultSession.setPermissionRequestHandler((contents, permission, callback, details) => {
+    if (permission === 'fullscreen' && isBrowserTab(contents) || (permission === 'display-capture' || permission === 'media') && isAudioProcessor(contents)) { callback(true); return }
+    const tab = tabs.find(item => item.view?.webContents === contents)
+    const mapped: SwpPermission | null = permission === 'notifications' ? 'notifications' : permission === 'media' ? ((details as Electron.MediaAccessPermissionRequest).mediaTypes?.includes('video') ? 'camera' : 'microphone') : null
+    if (!tab?.site || !mapped || tab.id !== activeId) { callback(false); return }
+    const stored = permissionFor(tab.site, mapped)
+    if (stored) { callback(stored === 'allow'); return }
+    if (oncePermissions.get(`${tab.id}:${tab.site}`)?.has(mapped)) { callback(true); return }
+    swpPrompts.push({ id: id(), kind: 'permission', site: tab.site, permission: mapped, tabId: tab.id, callback }); syncSwpPrompt()
+  })
+  session.defaultSession.setPermissionCheckHandler((contents, permission, requestingOrigin, details) => {
+    if (permission === 'fullscreen' && isBrowserTab(contents) || (permission === 'display-capture' || permission === 'media') && isAudioProcessor(contents)) return true
+    const tab = tabs.find(item => item.view?.webContents === contents)
+    const mapped: SwpPermission | null = permission === 'notifications' ? 'notifications' : permission === 'media' ? ((details as Electron.MediaAccessPermissionRequest).mediaTypes?.includes('video') ? 'camera' : 'microphone') : null
+    if (!tab?.site || !mapped) return false
+    return permissionFor(tab.site, mapped) === 'allow' || !!oncePermissions.get(`${tab.id}:${tab.site}`)?.has(mapped)
+  })
   window = new BrowserWindow({
     width: 1280, height: 820, minWidth: 680, minHeight: 400,
-    title: 'Skipy Browser', backgroundColor: '#111113', frame: false,
+    title: privateMode ? 'Skipy Browser – Inkognitó' : 'Skipy Browser', backgroundColor: '#111113', frame: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false, contextIsolation: true, sandbox: true,
     },
+  })
+  sdt = new SdtService({
+    window,
+    dataPath: path.join(app.getPath('userData'), 'skipy-data'),
+    enabled: () => getLibrary().settings.developerMode,
+    active: () => {
+      const tab = current()
+      if (!tab?.view || tab.closing || tab.error || tab.view.webContents.isDestroyed()) return null
+      const url = tab.view.webContents.getURL(), site = siteForUrl(url)
+      return site && /^https?:\/\//i.test(url) ? { id: tab.id, site, url, contents: tab.view.webContents } : null
+    },
+    canShow: () => !appFullscreen && !videoFullscreenTabId && !pendingJsDialog && !pendingDownloads.length && !swpPrompts.length,
+    changed: publish,
   })
   transitionSurface = new WebContentsView({ webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true } })
   transitionSurface.setBackgroundColor('#00000000')
   const transitionCss = `html{margin:0;width:100%;height:100%;background:transparent}body{margin:0;width:100%;height:100%;background:#080809;overflow:hidden;opacity:1;transition:opacity .28s cubic-bezier(.22,1,.36,1)}body.reveal{opacity:0}body:after{content:"";position:absolute;left:50%;top:50%;width:42vmax;height:42vmax;border-radius:50%;background:radial-gradient(circle,#17100c 0,#0b0908 35%,#080809 72%);transform:translate(-50%,-50%) scale(.7);opacity:.55}body.zoom:after{animation:zoom .42s cubic-bezier(.22,1,.36,1) both}@keyframes zoom{to{transform:translate(-50%,-50%) scale(1.45);opacity:.16}}@media(prefers-reduced-motion:reduce){body,body.zoom:after{transition:none;animation:none}}`
   void transitionSurface.webContents.loadURL(dataPage('', transitionCss)).catch(() => undefined)
   window.on('closed', () => {
+    void sdt?.dispose().catch(() => undefined)
     if (pendingJsDialog) answerJsDialog(pendingJsDialog.id, false)
+    for (const prompt of swpPrompts.splice(0)) prompt.callback?.(false)
     for (const pending of pendingDownloads.splice(0)) pending.item.cancel()
     for (const tab of tabs) stopBass(tab, true)
     if (transitionSurface && !transitionSurface.webContents.isDestroyed()) transitionSurface.webContents.close()
+    if (suggestionsView && !suggestionsView.webContents.isDestroyed()) suggestionsView.webContents.close()
+    suggestionsView = null
     transitionSurface = null
   })
   window.on('resize', layout)
@@ -1001,19 +1224,62 @@ if (hasSingleInstanceLock) void app.whenReady().then(() => {
   window.webContents.on('before-input-event', (event, input) => handleShortcut(input, event))
   window.webContents.on('did-finish-load', () => {
     publish()
+    setTimeout(() => window.webContents.send('browser:focus-address'), 0)
     setTimeout(() => { if (!panelView) panelView = overlayView('panel') }, 250)
     setTimeout(() => ensureToolView(), 450)
     setTimeout(() => { if (!downloadsView) downloadsView = overlayView('downloads') }, 650)
     setTimeout(() => ensureDownloadConfirmView(), 850)
     setTimeout(() => ensureJsDialogView(), 1050)
+    setTimeout(() => ensureSwpPromptView(), 1250)
+    setTimeout(() => ensureSuggestionsView(), 1450)
   })
   void window.loadFile(path.join(__dirname, '..', 'dist', 'index.html'))
   createTab()
 
   ipcMain.handle('browser:command', (event, action: unknown, value: unknown) => {
-    if (event.sender !== window.webContents && event.sender !== panelView?.webContents && event.sender !== downloadsView?.webContents && event.sender !== toolView?.webContents && event.sender !== downloadConfirmView?.webContents && event.sender !== jsDialogView?.webContents || typeof action !== 'string') return
+    if (event.sender !== window.webContents && event.sender !== panelView?.webContents && event.sender !== downloadsView?.webContents && event.sender !== toolView?.webContents && event.sender !== downloadConfirmView?.webContents && event.sender !== jsDialogView?.webContents && event.sender !== swpPromptView?.webContents && event.sender !== suggestionsView?.webContents || typeof action !== 'string') return
     const text = typeof value === 'string' ? value : ''
-    if (action === 'state') return stateFor(event.sender)
+    if (action === 'settings-developer') {
+      if ((event.sender !== window.webContents && event.sender !== panelView?.webContents) || (text !== 'on' && text !== 'off')) return
+      getLibrary().settings.developerMode = text === 'on'
+      if (text === 'off') sdt?.disabled()
+      else sdt?.bind()
+      saveLibrary(); publish(); return
+    }
+    if (action === 'new-window') { if (event.sender === window.webContents) launchBrowserWindow(false); return }
+    if (action === 'new-private-window') { if (event.sender === window.webContents) launchBrowserWindow(true); return }
+    if (action === 'sdt-toggle') {
+      if (event.sender === window.webContents && getLibrary().settings.developerMode) sdt?.toggle()
+      return
+    }
+    if (action === 'suggestions-open') {
+      if (event.sender !== window.webContents) return
+      try {
+        const draft = JSON.parse(text) as { rows?: SuggestionRow[]; selected?: number; bounds?: Electron.Rectangle }
+        if (!Array.isArray(draft.rows) || !draft.rows.length || draft.rows.length > 7 || !Number.isInteger(draft.selected) || !draft.bounds) return
+        const rows = draft.rows.map(row => ({ label: String(row.label || '').slice(0, 1000), detail: String(row.detail || '').slice(0, 8192), value: String(row.value || '').slice(0, 8192) }))
+        if (rows.some(row => !row.label || !row.value) || ![draft.bounds.x, draft.bounds.y, draft.bounds.width, draft.bounds.height].every(Number.isFinite)) return
+        showSuggestions(rows, draft.selected!, draft.bounds)
+      } catch { closeSuggestions() }
+      return
+    }
+    if (action === 'copy-current-url') {
+      if (event.sender !== window.webContents) return
+      const url = current()?.url ?? ''
+      if (/^https?:\/\//i.test(url)) { clipboard.writeText(url); notice('Link a vágólapra másolva.') }
+      return
+    }
+    if (action === 'suggestions-close') { if (event.sender === window.webContents) closeSuggestions(); return }
+    if (action === 'suggestion-choose') {
+      if (event.sender !== suggestionsView?.webContents || !suggestionsPopup) return
+      const row = suggestionsPopup.rows[Number(text)]
+      closeSuggestions()
+      if (row) navigate(row.value)
+      return
+    }
+    // Keep IPC replies strictly data-only. Some Electron objects expose values
+    // that JSON can represent but Chromium's structured clone rejects.
+    if (action === 'state') return JSON.parse(JSON.stringify(stateFor(event.sender)))
     if (action === 'notice-error') { if (text.length <= 180) notice(text, 'error'); return }
     if (action === 'window-minimize') window.minimize()
     else if (action === 'window-maximize') {
@@ -1026,11 +1292,6 @@ if (hasSingleInstanceLock) void app.whenReady().then(() => {
     else if (action === 'close') closeTab(text)
     else if (action === 'finish-close') {
       if (event.sender === window.webContents && tabs.find(tab => tab.id === text)?.closing) finishCloseTab(text)
-      return
-    }
-    else if (action === 'suggestion-inset') {
-      const inset = Number(text)
-      if (Number.isInteger(inset) && inset >= 0 && inset <= 400 && inset !== suggestionsInset) { suggestionsInset = inset; layout() }
       return
     }
     else if (action === 'toggle-mute') {
@@ -1055,6 +1316,17 @@ if (hasSingleInstanceLock) void app.whenReady().then(() => {
       } catch { /* Ignore invalid controls. */ }
       return
     }
+    else if (action === 'tool-height') {
+      if (event.sender !== toolView?.webContents || !toolPopover) return
+      const requested = Number(text)
+      if (Number.isFinite(requested)) {
+        // scrollHeight excludes the popover's two one-pixel borders. Without
+        // them Chromium exposes a scrollbar even when all content is visible.
+        const nextHeight = Math.max(80, Math.min(toolPopover === 'certificate' ? 350 : 310, Math.ceil(requested) + 2))
+        if (nextHeight !== toolContentHeight) { toolContentHeight = nextHeight; layout() }
+      }
+      return
+    }
     else if (action === 'tool-close') { setToolPopover(null); return }
     else if (action === 'navigate') navigate(text)
     else if (action === 'home') navigate(configuredHome() === HOME_URL ? '' : configuredHome())
@@ -1066,6 +1338,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(() => {
       else if (text === 'close') panel = null
       syncPanelOverlay()
       layout()
+      if (panel === 'privacy' && current()?.site) void refreshSiteStorage(current()!.site!)
     }
     else if (action === 'downloads-toggle') setDownloadsOpen(!downloadsOpen)
     else if (action === 'downloads-close') setDownloadsOpen(false)
@@ -1079,6 +1352,14 @@ if (hasSingleInstanceLock) void app.whenReady().then(() => {
         const answer = JSON.parse(text) as { id?: unknown; accept?: unknown; promptText?: unknown }
         if (typeof answer.id === 'string' && typeof answer.accept === 'boolean') answerJsDialog(answer.id, answer.accept, typeof answer.promptText === 'string' ? answer.promptText : '')
       } catch { /* Ignore invalid dialog responses. */ }
+      return
+    }
+    else if (action === 'swp-prompt-answer') {
+      if (event.sender !== swpPromptView?.webContents) return
+      try {
+        const answer = JSON.parse(text) as { id?: unknown; decision?: unknown }
+        if (typeof answer.id === 'string' && ['once', 'always-allow', 'always-block', 'deny'].includes(String(answer.decision))) answerSwpPrompt(answer.id, answer.decision as 'once' | 'always-allow' | 'always-block' | 'deny')
+      } catch { /* Ignore malformed answers. */ }
       return
     }
     else if (action === 'downloads-button-bounds') {
@@ -1170,6 +1451,13 @@ if (hasSingleInstanceLock) void app.whenReady().then(() => {
         notice(text === 'on' ? 'Ujjlenyomat-védelem bekapcsolva.' : 'Ujjlenyomat-védelem kikapcsolva.')
       }
     }
+    else if (action === 'swp-adblock') { const site = current()?.site; if (site) { toggleAdblock(site); current()?.view?.webContents.reload(); notice(adblockEnabled(site) ? 'SWP reklámvédelem bekapcsolva.' : 'SWP reklámvédelem kikapcsolva.') } }
+    else if (action === 'swp-permission-reset') { const site = current()?.site; if (site && ['camera', 'microphone', 'notifications'].includes(text)) setPermission(site, text as SwpPermission) }
+    else if (action === 'swp-popup-reset') { const site = current()?.site; if (site) setPopup(site) }
+    else if (action === 'swp-clear-on-exit') { const site = current()?.site; if (site) toggleClearOnExit(site) }
+    else if (action === 'swp-clear-site') { const site = current()?.site; if (site) { const run = () => void clearSiteData(site).then(() => notice('A webhely helyi adatai törölve.')).catch(() => notice('A webhelyadatok törlése nem sikerült.', 'error')); if (runningDownloads.size || current()?.audible) { swpPrompts.push({ id: id(), kind: 'clear-data', site, target: 'site', tabId: activeId, callback: allow => { if (allow) run() } }); syncSwpPrompt() } else run() } }
+    else if (action === 'swp-clear-all') { const run = () => void session.defaultSession.clearStorageData().then(() => { storageBySite.clear(); notice('Minden webhelyadat törölve.'); publish() }).catch(() => notice('A webhelyadatok törlése nem sikerült.', 'error')); if (runningDownloads.size || tabs.some(tab => tab.audible)) { swpPrompts.push({ id: id(), kind: 'clear-data', site: 'Minden webhely', target: 'all', tabId: activeId, callback: allow => { if (allow) run() } }); syncSwpPrompt() } else run() }
+    else if (action === 'swp-update-lists') { void updateLists(true).then(ok => notice(ok ? 'Az SWP szűrőlisták frissültek.' : 'A szűrőlisták frissítése nem sikerült.', ok ? 'success' : 'error')).finally(() => publish()) }
     publish()
   })
 })
@@ -1179,7 +1467,14 @@ app.on('before-quit', event => {
   flushPrivacy()
   if (dataFlushedForQuit) return
   event.preventDefault()
-  void flushLibrary().finally(() => { dataFlushedForQuit = true; app.quit() })
+  const clearMarked = privateMode
+    ? Promise.all([session.defaultSession.clearStorageData().catch(() => undefined), session.defaultSession.clearCache().catch(() => undefined)])
+    : Promise.all(swpData().clearOnExit.flatMap(site => ['https://', 'http://'].map(protocol => session.defaultSession.clearStorageData({ origin: `${protocol}${site}` }).catch(() => undefined))))
+  void Promise.all([flushLibrary(), flushSwp(), sdt?.flush(), clearMarked]).finally(() => { dataFlushedForQuit = true; app.quit() })
+})
+app.on('quit', () => {
+  const disposableRoot = privateRoot || (windowToken ? sessionDataPath : '')
+  if (disposableRoot) { try { fs.rmSync(disposableRoot, { recursive: true, force: true }) } catch { /* Chromium may still be releasing a file handle. */ } }
 })
 app.on('window-all-closed', () => app.quit())
 app.on('second-instance', () => {
