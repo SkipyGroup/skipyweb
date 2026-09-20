@@ -7,6 +7,7 @@
     <title>Skipy Browser</title>
   </head>
   <body>
+    <section id="onboarding" class="onboarding" hidden><div class="onboarding-card"><img src="./skipy-logo.png" alt="Skipy Browser" /><p class="onboarding-kicker">ÜDV A SKIPYBEN</p><h1>Gyorsabb, nyugodtabb böngészés.</h1><p>A Skipy védi a webes kéréseidet, kezeli a lapjaidat és minden fontos adatot helyben tart.</p><div class="onboarding-features"><span>◆ SWP webvédelem</span><span>◆ Inkognitó ablakok</span><span>◆ Lapok automatikus hibernálása</span></div><button id="onboarding-finish" type="button">Kezdjük</button></div></section>
     <div id="app">
       <header class="topbar">
         <div class="nav-buttons">
@@ -18,15 +19,14 @@
         <div class="tabs" id="tabs"></div>
         <div class="library-actions">
           <span id="private-indicator" class="private-indicator" hidden><i data-lucide="venetian-mask"></i><b>INKOGNITÓ</b></span>
-          <button id="new-window" class="tool-action" title="Új ablak (Ctrl+N)" aria-label="Új ablak"><i data-lucide="panels-top-left"></i></button>
-          <button id="new-private-window" class="tool-action" title="Új inkognitó ablak (Ctrl+Shift+N)" aria-label="Új inkognitó ablak"><i data-lucide="venetian-mask"></i></button>
+          <details id="create-menu" class="create-menu"><summary class="tool-action" title="Új lap vagy ablak" aria-label="Új lap vagy ablak"><i data-lucide="plus"></i></summary><div><button id="menu-new-tab"><i data-lucide="plus"></i><span>Új lap<kbd>Ctrl+T</kbd></span></button><button id="new-window"><i data-lucide="panels-top-left"></i><span>Új ablak<kbd>Ctrl+N</kbd></span></button><button id="new-private-window"><i data-lucide="venetian-mask"></i><span>Új inkognitó ablak<kbd>Ctrl+Shift+N</kbd></span></button></div></details>
           <button id="show-sdt" class="tool-action" title="SDT · Skipy Developer Tools (Ctrl+Shift+D)" aria-label="Skipy Developer Tools" aria-pressed="false" hidden><i data-lucide="code-xml"></i></button>
           <button id="show-bass" class="tool-action" title="Bass Booster" aria-label="Bass Booster"><i data-lucide="audio-lines"></i></button>
           <button id="show-privacy" class="tool-action" title="Adatvédelem" aria-label="Adatvédelem"><i data-lucide="shield"></i></button>
-          <button id="bookmark-toggle" class="tool-action" title="Könyvjelző hozzáadása" aria-label="Könyvjelző hozzáadása"><i data-lucide="bookmark"></i></button>
           <button id="show-bookmarks" class="tool-action" title="Könyvjelzők" aria-label="Könyvjelzők"><i data-lucide="book-open"></i></button>
           <button id="show-history" class="tool-action" title="Előzmények" aria-label="Előzmények"><i data-lucide="history"></i></button>
           <button id="show-downloads" class="tool-action" title="Letöltések" aria-label="Letöltések"><i data-lucide="download"></i></button>
+          <button id="show-extensions" class="tool-action" title="Bővítmények" aria-label="Bővítmények"><i data-lucide="puzzle"></i></button>
           <button id="show-settings" class="tool-action" title="Beállítások" aria-label="Beállítások"><i data-lucide="sliders-horizontal"></i></button>
         </div>
         <div class="window-controls" aria-label="Ablakvezérlők">
@@ -36,7 +36,7 @@
         </div>
       </header>
       <div class="toolbar">
-        <form id="address-form"><button id="site-security" class="site-mark" type="button" title="Kapcsolat adatai" aria-label="Kapcsolat adatai"><i data-lucide="globe"></i></button><input id="address" aria-label="Címsor" spellcheck="false" placeholder="Keress a weben, vagy írj be egy URL-t…" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="address-suggestions" /><button id="copy-link" class="address-action" type="button" title="Link másolása" aria-label="Aktív oldal linkjének másolása"><i data-lucide="copy"></i></button><button class="address-submit" type="submit" title="Megnyitás" aria-label="Megnyitás"><i data-lucide="arrow-right"></i></button><div id="address-suggestions" class="suggestions" role="listbox" hidden></div></form>
+        <form id="address-form"><button id="site-security" class="site-mark" type="button" title="Oldalbiztonság" aria-label="Oldalbiztonság és kapcsolat"><i data-lucide="globe"></i></button><input id="address" aria-label="Címsor" spellcheck="false" placeholder="Keress a weben, vagy írj be egy URL-t…" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="address-suggestions" /><button id="bookmark-toggle" class="address-action" type="button" title="Kedvencekhez adás" aria-label="Kedvencekhez adás"><i data-lucide="star"></i></button><button id="copy-link" class="address-action" type="button" title="Link másolása" aria-label="Aktív oldal linkjének másolása"><i data-lucide="copy"></i></button><button class="address-submit" type="submit" title="Megnyitás" aria-label="Megnyitás"><i data-lucide="arrow-right"></i></button><div id="address-suggestions" class="suggestions" role="listbox" hidden></div></form>
         <div id="load-progress" class="load-progress" role="progressbar" aria-label="Oldal betöltése" hidden><div id="load-progress-fill"></div></div>
       </div>
       <main id="home-screen" class="home-screen">
@@ -56,7 +56,7 @@
         <div id="panel-list" class="panel-list"></div>
       </aside>
       <section id="tool-popover" class="tool-popover" hidden></section>
-      <section id="download-confirm" class="download-confirm" hidden><div class="download-confirm-card"><div class="download-confirm-icon"><i data-lucide="download"></i></div><div><h2>Letöltöd ezt a fájlt?</h2><strong id="download-confirm-name"></strong><p id="download-confirm-meta"></p></div><div class="download-confirm-actions"><button id="download-confirm-cancel" type="button">Mégse</button><button id="download-confirm-accept" type="button">Letöltés</button></div></div></section>
+      <section id="download-confirm" class="download-confirm" hidden><div class="download-confirm-card"><div class="download-confirm-icon"><i data-lucide="download"></i></div><div><h2>Letöltöd ezt a fájlt?</h2><strong id="download-confirm-name"></strong><p id="download-confirm-meta"></p></div><div class="download-confirm-actions"><button id="download-confirm-cancel" type="button">Mégse</button><button id="download-confirm-custom" type="button">Egyéni hely…</button><button id="download-confirm-accept" type="button">Letöltés</button></div></div></section>
       <dialog id="quicklink-dialog" class="quicklink-dialog"><form id="quicklink-form"><h2 id="quicklink-dialog-title"></h2><input id="quicklink-id" type="hidden" /><label>Név<input id="quicklink-title" maxlength="60" required /></label><label>Webcím<input id="quicklink-url" type="url" placeholder="https://pelda.hu/" required /></label><p id="quicklink-error" role="alert"></p><div class="dialog-actions"><button id="quicklink-cancel" type="button">Mégse</button><button type="submit">Mentés</button></div></form></dialog>
     </div>
     <script type="module" src="/main.ts"></script>

@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'" />
+    <style>.tool-tabs button small{display:block;margin-left:3px;color:#ff9a55;font-size:6px;letter-spacing:.3px}.development-badge{display:inline-flex;padding:2px 6px;border:1px solid #75421f;border-radius:99px;color:#ff9950;font-size:7px;letter-spacing:.4px;vertical-align:middle}</style>
     <title>SDT · Skipy Developer Tools</title>
   </head>
   <body>
@@ -16,7 +17,7 @@
       <nav class="tool-tabs" role="tablist" aria-label="Fejlesztői eszközök">
         <button id="tab-colors" role="tab" aria-selected="true" aria-controls="section-colors" data-section="colors"><i data-lucide="pipette"></i>Színek</button>
         <button id="tab-api" role="tab" aria-selected="false" aria-controls="section-api" data-section="api" tabindex="-1"><i data-lucide="braces"></i>API</button>
-        <button id="tab-tests" role="tab" aria-selected="false" aria-controls="section-tests" data-section="tests" tabindex="-1"><i data-lucide="list-checks"></i>UI-tesztek</button>
+        <button id="tab-tests" role="tab" aria-selected="false" aria-controls="section-tests" data-section="tests" tabindex="-1"><i data-lucide="list-checks"></i>UI-tesztek <small>FEJLESZTÉS ALATT</small></button>
       </nav>
       <div id="message" class="status-message" role="status" hidden></div>
       <div class="tool-content">
@@ -42,7 +43,7 @@
           <p class="hint">A kérés nem használja az oldal cookie-jait vagy bejelentkezését.</p>
         </section>
         <section id="section-tests" role="tabpanel" aria-labelledby="tab-tests" hidden>
-          <div class="section-intro"><h2>Automatizált UI-tesztek</h2><p>Futtatáskor a teszt automatikusan megnyitja az első URL-lépést, majd onnan halad végig.</p></div>
+          <div class="section-intro"><h2>Automatizált UI-tesztek <span class="development-badge">FEJLESZTÉS ALATT</span></h2><p>Futtatáskor a teszt automatikusan megnyitja az első URL-lépést, majd onnan halad végig.</p></div>
           <div class="saved-row"><select id="saved-tests" aria-label="Mentett tesztek"><option value="">Új teszt</option></select><button id="test-new" type="button" title="Új teszt">Új</button><button id="test-delete" class="icon-button danger" type="button" title="Mentett teszt törlése" aria-label="Mentett teszt törlése" disabled><i data-lucide="trash-2"></i></button></div>
           <label class="field-label" for="test-name">Teszt neve</label><input id="test-name" class="wide" maxlength="80" placeholder="Például: keresés az oldalon" />
           <div class="test-actions"><button id="record" type="button"><i data-lucide="circle"></i>Rögzítés</button><button id="run" class="primary" type="button"><i data-lucide="play"></i>Futtatás</button><button id="run-stop" type="button" hidden>Leállítás</button><button id="test-save" type="button"><i data-lucide="save"></i>Mentés</button></div>

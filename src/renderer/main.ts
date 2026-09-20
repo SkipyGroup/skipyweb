@@ -1,8 +1,8 @@
-import './style.css'
-import { createIcons, ArrowLeft, ArrowRight, RotateCw, House, Shield, Bookmark, BookOpen, History, Download, SlidersHorizontal, Minus, Square, X, Globe, Search, Grid2X2, Plus, Pencil, Trash2, Copy, Star, Volume2, VolumeX, AudioLines, LockKeyhole, TriangleAlert, CodeXml, PanelsTopLeft, VenetianMask } from 'lucide'
+﻿import './style.css'
+import { createIcons, ArrowLeft, ArrowRight, RotateCw, House, Shield, Bookmark, BookOpen, History, Download, SlidersHorizontal, Minus, Square, X, Globe, Search, Grid2X2, Plus, Pencil, Trash2, Copy, Star, Volume2, VolumeX, AudioLines, LockKeyhole, TriangleAlert, CodeXml, PanelsTopLeft, VenetianMask, Puzzle } from 'lucide'
 import { classifyInput } from '../main/input'
 
-const iconSet = { ArrowLeft, ArrowRight, RotateCw, House, Shield, Bookmark, BookOpen, History, Download, SlidersHorizontal, Minus, Square, X, Globe, Search, Grid2X2, Plus, Pencil, Trash2, Copy, Star, Volume2, VolumeX, AudioLines, LockKeyhole, TriangleAlert, CodeXml, PanelsTopLeft, VenetianMask }
+const iconSet = { ArrowLeft, ArrowRight, RotateCw, House, Shield, Bookmark, BookOpen, History, Download, SlidersHorizontal, Minus, Square, X, Globe, Search, Grid2X2, Plus, Pencil, Trash2, Copy, Star, Volume2, VolumeX, AudioLines, LockKeyhole, TriangleAlert, CodeXml, PanelsTopLeft, VenetianMask, Puzzle }
 function renderIcons() { createIcons({ icons: iconSet, attrs: { 'stroke-width': 2 } }) }
 function icon(name: string) {
   const element = document.createElement('i')
@@ -11,14 +11,14 @@ function icon(name: string) {
 }
 function setIcon(element: HTMLElement, name: string) { if (element.dataset.iconName !== name) { element.dataset.iconName = name; element.replaceChildren(icon(name)) } }
 
-type Tab = { id: string; title: string; url: string; favicon: string | null; loading: boolean; loadEpoch: number; audible: boolean; muted: boolean; bassDb: number; bassStatus: 'off' | 'starting' | 'active' | 'error'; error: string | null; canGoBack: boolean; canGoForward: boolean; closing: boolean }
+type Tab = { id: string; title: string; url: string; favicon: string | null; loading: boolean; loadEpoch: number; audible: boolean; muted: boolean; bassDb: number; bassStatus: 'off' | 'starting' | 'active' | 'error'; error: string | null; canGoBack: boolean; canGoForward: boolean; closing: boolean; hibernated: boolean }
 type CertificateState = { status: 'none' | 'loading' | 'secure' | 'error' | 'unavailable'; host?: string; subject?: string; issuer?: string; validFrom?: number; validTo?: number; protocol?: string; cipher?: string; error?: string }
-type Bookmark = { id: string; title: string; url: string; createdAt: number; favicon?: string }
+type Bookmark = { id: string; title: string; url: string; createdAt: number; favicon?: string; folder?: string }
 type HistoryEntry = { id: string; title: string; url: string; visitedAt: number; favicon?: string }
-type DownloadEntry = { id: string; name: string; path: string; url: string; received: number; total: number; status: 'progressing' | 'completed' | 'cancelled' | 'interrupted'; startedAt: number }
+type DownloadEntry = { id: string; name: string; path: string; url: string; received: number; total: number; status: 'progressing' | 'paused' | 'completed' | 'cancelled' | 'interrupted'; startedAt: number }
 type QuickLink = { id: string; title: string; url: string }
 type Privacy = { site: string; protection: 'active' | 'error' | 'pending'; fingerprintEnabled: boolean; blockedHosts: string[]; rows: { site: string; host: string; count: number; blocked: number; lastSeen: number; blockedNow: boolean }[] }
-type State = { privateMode: boolean; activeId: string; sdtOpen: boolean; globalBassDb: number; globalBassFrequency: number; maximized: boolean; fullscreenMode: 'none' | 'app' | 'video'; tabs: Tab[]; panel: 'bookmarks' | 'history' | 'downloads' | 'settings' | 'privacy' | null; downloadsOpen: boolean; sessionDownloadIds: string[]; pendingDownload: { id: string; filename: string; host: string; total: number } | null; toolPopover: 'certificate' | 'bass' | null; certificate: CertificateState; privacy: Privacy | null; swp: { adblock:boolean; listStatus:'bundled'|'updated'|'error' } | null; library: { bookmarks: Bookmark[]; history: HistoryEntry[]; downloads: DownloadEntry[]; quickLinks: QuickLink[]; settings: { searchEngine: 'google' | 'duckduckgo' | 'bing'; homepage: string; developerMode: boolean } } }
+type State = { privateMode: boolean; activeId: string; sdtOpen: boolean; globalBassDb: number; globalBassFrequency: number; maximized: boolean; fullscreenMode: 'none' | 'app' | 'video'; tabs: Tab[]; panel: 'bookmarks' | 'history' | 'downloads' | 'settings' | 'privacy' | 'extensions' | null; downloadsOpen: boolean; sessionDownloadIds: string[]; pendingDownload: { id: string; filename: string; host: string; total: number } | null; toolPopover: 'certificate' | 'bass' | null; certificate: CertificateState; pageSafety: { level: 'safe' | 'warning' | 'danger'; title: string; reasons: string[] }; privacy: Privacy | null; swp: { adblock:boolean; listStatus:'bundled'|'updated'|'error' } | null; library: { bookmarks: Bookmark[]; history: HistoryEntry[]; downloads: DownloadEntry[]; quickLinks: QuickLink[]; extensions: {id:string;name:string;path:string;enabled:boolean}[]; settings: { searchEngine: 'google' | 'duckduckgo' | 'bing'; homepage: string; developerMode: boolean; onboardingComplete: boolean; autoHibernateMinutes: number } } }
 type BrowserBridge = {
   command: (action: string, value?: string) => Promise<State | string | void>
   onState: (callback: (state: State) => void) => () => void
@@ -38,7 +38,7 @@ if (overlayMode === 'panel' || overlayMode === 'downloads' || overlayMode === 't
 let overlayClosing = false
 let lastOverlayPanel: State['panel'] = null
 const tabElements = new Map<string, HTMLElement>()
-let state: State = { privateMode: false, activeId: '', sdtOpen: false, globalBassDb: 0, globalBassFrequency: 95, maximized: false, fullscreenMode: 'none', tabs: [], panel: null, downloadsOpen: false, sessionDownloadIds: [], pendingDownload: null, toolPopover: null, certificate: { status: 'none' }, privacy: null, swp: null, library: { bookmarks: [], history: [], downloads: [], quickLinks: [], settings: { searchEngine: 'google', homepage: 'skipy', developerMode: false } } }
+let state: State = { privateMode: false, activeId: '', sdtOpen: false, globalBassDb: 0, globalBassFrequency: 95, maximized: false, fullscreenMode: 'none', tabs: [], panel: null, downloadsOpen: false, sessionDownloadIds: [], pendingDownload: null, toolPopover: null, certificate: { status: 'none' }, pageSafety: {level:'safe',title:'',reasons:[]}, privacy: null, swp: null, library: { bookmarks: [], history: [], downloads: [], quickLinks: [], extensions: [], settings: { searchEngine: 'google', homepage: 'skipy', developerMode: false, onboardingComplete: false, autoHibernateMinutes: 15 } } }
 let homeModeDraft: 'skipy' | 'custom' | null = null
 let homepageDraft: string | null = null
 let settingsError = ''
@@ -172,7 +172,7 @@ function updateDownloadsButton() {
   const bounds = JSON.stringify({ x: rect.x, y: rect.y, width: rect.width, height: rect.height })
   if (bounds !== lastDownloadButtonBounds) { lastDownloadButtonBounds = bounds; command('downloads-button-bounds', bounds) }
   const ids = new Set(state.sessionDownloadIds)
-  const active = state.library.downloads.filter(entry => ids.has(entry.id) && entry.status === 'progressing')
+  const active = state.library.downloads.filter(entry => ids.has(entry.id) && (entry.status === 'progressing' || entry.status === 'paused'))
   const unknown = active.some(entry => entry.total <= 0)
   const total = active.reduce((sum, entry) => sum + Math.max(0, entry.total), 0)
   const received = active.reduce((sum, entry) => sum + Math.min(Math.max(0, entry.received), Math.max(0, entry.total)), 0)
@@ -415,6 +415,12 @@ function renderPanel() {
   const actions = $('panel-actions')
   list.replaceChildren(); actions.replaceChildren()
   if (!state.panel) return
+  if (state.panel === 'extensions') {
+    $('panel-title').textContent = 'Bővítmények'
+    actions.append(actionButton('Kicsomagolt bővítmény betöltése', 'extension-add'))
+    for (const extension of state.library.extensions) { const row=document.createElement('div');row.className='library-row';const title=document.createElement('div');title.className='row-title';title.textContent=extension.name;const subtitle=document.createElement('div');subtitle.className='row-subtitle';subtitle.textContent=extension.enabled?'Aktív':'Kikapcsolva';const footer=document.createElement('div');footer.className='row-footer';footer.append(actionButton(extension.enabled?'Kikapcsolás':'Bekapcsolás','extension-toggle',extension.id),actionButton('Eltávolítás','extension-remove',extension.id));row.append(title,subtitle,footer);list.append(row) }
+    return
+  }
   const labels = { bookmarks: 'Könyvjelzők', history: 'Előzmények', downloads: 'Letöltések', settings: 'Beállítások', privacy: 'Adatvédelem' }
   $('panel-title').textContent = labels[state.panel]
   if (state.panel === 'settings') { renderSettings(list); return }
@@ -441,14 +447,15 @@ function renderPanel() {
     footer.className = 'row-footer'
     if ('status' in entry) {
       const status = document.createElement('span')
-      const labels = { progressing: 'Letöltés folyamatban', completed: 'Kész', cancelled: 'Megszakítva', interrupted: 'Hiba miatt megszakadt' }
+      const labels: Record<string, string> = { paused: 'Szüneteltetve', progressing: 'Letöltés folyamatban', completed: 'Kész', cancelled: 'Megszakítva', interrupted: 'Hiba miatt megszakadt' }
       status.textContent = entry.status === 'progressing' && entry.total > 0
         ? `${Math.round(entry.received / entry.total * 100)}% · ${formatBytes(entry.received)} / ${formatBytes(entry.total)}`
         : `${labels[entry.status]} · ${formatBytes(entry.received)}`
       footer.append(status)
-      if (entry.status === 'progressing') footer.append(actionButton('Megszakítás', 'download-cancel', entry.id))
+      if (entry.status === 'progressing') footer.append(actionButton('Szünet', 'download-pause', entry.id), actionButton('Megszakítás', 'download-cancel', entry.id))
+      else if (entry.status === 'paused') footer.append(actionButton('Folytatás', 'download-resume', entry.id), actionButton('Megszakítás', 'download-cancel', entry.id))
       else {
-        if (entry.status === 'completed') footer.append(actionButton('Mappa', 'download-reveal', entry.id))
+        if (entry.status === 'completed') footer.append(actionButton('Megnyitás', 'download-reveal', entry.id))
         footer.append(actionButton('Eltávolítás', 'download-remove', entry.id))
       }
     } else {
@@ -562,6 +569,7 @@ function renderDownloadConfirmation() {
   $('download-confirm-name').textContent = pending.filename
   $('download-confirm-meta').textContent = `${pending.host} · ${pending.total > 0 ? formatBytes(pending.total) : 'ismeretlen méret'}`
   ;($('download-confirm-accept') as HTMLButtonElement).dataset.id = pending.id
+  ;($('download-confirm-custom') as HTMLButtonElement).dataset.id = pending.id
   ;($('download-confirm-cancel') as HTMLButtonElement).dataset.id = pending.id
 }
 
@@ -577,6 +585,7 @@ function render(next: State) {
   if (overlayMode) { renderPanel(); renderIcons(); return }
   document.body.classList.toggle('fullscreen', state.fullscreenMode !== 'none')
   document.body.classList.toggle('private-mode', state.privateMode)
+  $('onboarding').hidden = state.privateMode || state.library.settings.onboardingComplete
   $('private-indicator').hidden = !state.privateMode
   $('window-maximize').classList.toggle('restored', state.maximized)
   setIcon($('window-maximize'), state.maximized ? 'copy' : 'square')
@@ -585,12 +594,16 @@ function render(next: State) {
   if (state.panel !== 'settings') { homeModeDraft = null; homepageDraft = null; settingsError = '' }
   const active = state.tabs.find(tab => tab.id === state.activeId)
   const security = $('site-security')
-  setIcon(security, state.certificate.status === 'secure' ? 'lock-keyhole' : state.certificate.status === 'error' || state.certificate.status === 'unavailable' ? 'triangle-alert' : 'globe')
-  security.classList.toggle('secure', state.certificate.status === 'secure')
-  security.classList.toggle('certificate-error', state.certificate.status === 'error')
-  security.title = state.certificate.status === 'secure' ? 'Érvényes HTTPS-kapcsolat · részletek' : state.certificate.status === 'error' ? 'Tanúsítványhiba · részletek' : 'Kapcsolat adatai'
+  setIcon(security, state.pageSafety.level === 'safe' ? 'lock-keyhole' : 'triangle-alert')
+  security.classList.toggle('secure', state.pageSafety.level === 'safe')
+  security.classList.toggle('certificate-error', state.pageSafety.level === 'danger')
+  security.title = `${state.pageSafety.title} · részletek`
+  const favoriteActive = !!active && state.library.bookmarks.some(entry => entry.url === active.url)
+  $('bookmark-toggle').classList.toggle('bookmarked', favoriteActive)
+  $('bookmark-toggle').title = favoriteActive ? 'Eltávolítás a kedvencekből' : 'Kedvencekhez adás'
   $('show-bass').classList.toggle('bass-active', state.globalBassDb > 0)
   $('show-sdt').hidden = !state.library.settings.developerMode
+  $('show-extensions').classList.toggle('selected', state.panel === 'extensions')
   $('show-sdt').classList.toggle('selected', !!state.sdtOpen)
   $('show-sdt').setAttribute('aria-pressed', String(!!state.sdtOpen))
   $('show-privacy').classList.toggle('swp-active', !!state.swp?.adblock)
@@ -613,13 +626,14 @@ function render(next: State) {
         event.stopPropagation()
         command('close', tab.id)
       })
+      item.addEventListener('contextmenu', event => { event.preventDefault(); command('tab-context-menu', tab.id) })
       item.addEventListener('animationend', event => {
         if (event.animationName !== 'tab-enter') return
         if (item) { delete item.dataset.entering; item.classList.remove('entering') }
       })
       tabElements.set(tab.id, item)
     }
-    item.className = `tab${tab.id === state.activeId ? ' active' : ''}${tab.loading ? ' loading' : ''}${tab.closing ? ' closing' : ''}${item.dataset.entering === 'true' ? ' entering' : ''}`
+    item.className = `tab${tab.id === state.activeId ? ' active' : ''}${tab.loading ? ' loading' : ''}${tab.hibernated ? ' hibernated' : ''}${tab.closing ? ' closing' : ''}${item.dataset.entering === 'true' ? ' entering' : ''}`
     item.setAttribute('aria-disabled', String(tab.closing))
     if (tab.closing && item.dataset.closeAcknowledged !== 'true') {
       item.dataset.closeAcknowledged = 'true'
@@ -680,17 +694,7 @@ function render(next: State) {
     const dx = before.left - after.left
     if (Math.abs(dx) > 0.5) item.animate([{ transform: `translateX(${dx}px)` }, { transform: 'translateX(0)' }], { duration: 220, easing: 'cubic-bezier(.22,1,.36,1)' })
   }
-  let add = tabsElement.querySelector<HTMLButtonElement>('.new-tab')
-  if (!add) {
-    add = document.createElement('button')
-    add.className = 'new-tab'
-    add.append(icon('plus'))
-    add.title = 'Új lap'
-    add.setAttribute('aria-label', 'Új lap')
-    add.addEventListener('click', () => { command('new'); focusAddress() })
-    tabsElement.append(add)
-  }
-  if (tabsElement.lastElementChild !== add) tabsElement.append(add)
+  tabsElement.querySelector('.new-tab')?.remove()
 
   if (activeChanged || document.activeElement !== address) {
     address.value = active?.url === 'skipy://home' ? '' : active?.url ?? ''
@@ -733,6 +737,7 @@ $('forward').addEventListener('click', () => command('forward'))
 $('reload').addEventListener('click', () => command('reload'))
 $('home').addEventListener('click', () => command('home'))
 $('bookmark-toggle').addEventListener('click', () => command('bookmark-toggle'))
+$('onboarding-finish').addEventListener('click', () => command('onboarding-complete'))
 $('copy-link').addEventListener('click', () => command('copy-current-url'))
 function openTool(kind: 'certificate' | 'bass', element: HTMLElement) {
   const rect = element.getBoundingClientRect()
@@ -743,17 +748,21 @@ $('show-bass').addEventListener('click', () => openTool('bass', $('show-bass')))
 $('show-bookmarks').addEventListener('click', () => command('panel', 'bookmarks'))
 $('show-history').addEventListener('click', () => command('panel', 'history'))
 $('show-downloads').addEventListener('click', () => command('downloads-toggle'))
+$('show-extensions').addEventListener('click', () => command('panel', 'extensions'))
 $('show-settings').addEventListener('click', () => command('panel', 'settings'))
 $('show-sdt').addEventListener('click', () => command('sdt-toggle'))
 $('show-privacy').addEventListener('click', () => command('panel', 'privacy'))
 $('new-window').addEventListener('click', () => command('new-window'))
 $('new-private-window').addEventListener('click', () => command('new-private-window'))
+$('menu-new-tab').addEventListener('click', () => { command('new'); focusAddress() })
+document.querySelectorAll('#create-menu button').forEach(button => button.addEventListener('click', () => { ($('create-menu') as HTMLDetailsElement).open = false }))
 $('panel-close').addEventListener('click', () => command(overlayMode === 'downloads' ? 'downloads-close' : 'panel', overlayMode === 'downloads' ? undefined : 'close'))
 window.addEventListener('resize', updateDownloadsButton)
 $('window-minimize').addEventListener('click', () => command('window-minimize'))
 $('window-maximize').addEventListener('click', () => command('window-maximize'))
 $('window-close').addEventListener('click', () => command('window-close'))
 $('download-confirm-accept').addEventListener('click', event => command('download-confirm', (event.currentTarget as HTMLButtonElement).dataset.id))
+$('download-confirm-custom').addEventListener('click', event => command('download-confirm-custom', (event.currentTarget as HTMLButtonElement).dataset.id))
 $('download-confirm-cancel').addEventListener('click', event => command('download-reject', (event.currentTarget as HTMLButtonElement).dataset.id))
 window.addEventListener('keydown', event => {
   if (overlayMode === 'download-confirm' && event.key === 'Escape' && state.pendingDownload) command('download-reject', state.pendingDownload.id)

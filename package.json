@@ -9,6 +9,7 @@
     "build": "tsc -p tsconfig.main.json && tsc -p tsconfig.preload.json && vite build src/renderer --config vite.config.ts --outDir ../../dist --emptyOutDir --base ./",
     "start": "npm run build && electron .",
     "dist:win": "tsc -p tsconfig.main.json && tsc -p tsconfig.preload.json && vite build src/renderer --config vite.config.ts --outDir ../../dist --emptyOutDir --base ./ && electron-builder --win nsis --x64",
+    "dist:mac": "tsc -p tsconfig.main.json && tsc -p tsconfig.preload.json && vite build src/renderer --config vite.config.ts --outDir ../../dist --emptyOutDir --base ./ && electron-builder --mac dmg --x64 --arm64",
     "check": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.preload.json --noEmit && tsc -p tsconfig.renderer.json --noEmit"
   },
   "build": {
@@ -21,6 +22,12 @@
       "target": "nsis",
       "icon": "assets/skipy.ico",
       "artifactName": "Skipy-Browser-Setup-${version}-${arch}.${ext}"
+    },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.utilities",
+      "icon": "assets/skipy.png",
+      "artifactName": "Skipy-Browser-${version}-${arch}.${ext}"
     },
     "nsis": {
       "oneClick": false,

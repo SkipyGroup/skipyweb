@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, net, session, shell, WebContentsView, type MenuItemConstructorOptions } from 'electron'
+﻿import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, net, session, shell, WebContentsView, type MenuItemConstructorOptions } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
@@ -34,7 +34,7 @@ app.commandLine.appendSwitch('disk-cache-dir', path.join(sessionDataPath, 'Cache
 const hasSingleInstanceLock = windowToken ? true : app.requestSingleInstanceLock()
 if (!hasSingleInstanceLock) app.quit()
 type CertificateState = { status: 'none' | 'loading' | 'secure' | 'error' | 'unavailable'; host?: string; subject?: string; issuer?: string; validFrom?: number; validTo?: number; protocol?: string; cipher?: string; error?: string }
-type Tab = { id: string; view: WebContentsView | null; title: string; url: string; favicon: string | null; loading: boolean; loadEpoch: number; audible: boolean; muted: boolean; bassDb: number; bassStatus: 'off' | 'starting' | 'active' | 'error'; audioView: WebContentsView | null; certificate: CertificateState; certCandidates: Map<string, CertificateState>; certReady: Promise<void> | null; error: string | null; site: string | null; protection: 'active' | 'error' | 'pending'; closing: boolean }
+type Tab = { id: string; view: WebContentsView | null; title: string; url: string; favicon: string | null; loading: boolean; loadEpoch: number; audible: boolean; muted: boolean; bassDb: number; bassStatus: 'off' | 'starting' | 'active' | 'error'; audioView: WebContentsView | null; certificate: CertificateState; certCandidates: Map<string, CertificateState>; certReady: Promise<void> | null; error: string | null; site: string | null; protection: 'active' | 'error' | 'pending'; closing: boolean; hibernated: boolean; lastActiveAt: number }
 const tabs: Tab[] = []
 const closeTimers = new Map<string, ReturnType<typeof setTimeout>>()
 let activeId = ''
@@ -43,7 +43,7 @@ let globalBassFrequency = 95
 let window: BrowserWindow
 let sdt: SdtService | null = null
 let nextId = 1
-let panel: 'bookmarks' | 'history' | 'downloads' | 'settings' | 'privacy' | null = null
+let panel: 'bookmarks' | 'history' | 'downloads' | 'settings' | 'privacy' | 'extensions' | null = null
 let panelView: WebContentsView | null = null
 let downloadsView: WebContentsView | null = null
 let downloadConfirmView: WebContentsView | null = null
@@ -84,6 +84,7 @@ let noticeTimer: ReturnType<typeof setTimeout> | null = null
 let activeNoticeMessage = ''
 const noticeQueue: { message: string; kind: 'success' | 'error' }[] = []
 const runningDownloads = new Map<string, Electron.DownloadItem>()
+const downloadTabIds = new Map<string, string>()
 type PendingDownload = { id: string; item: Electron.DownloadItem; contents: Electron.WebContents | null; filename: string; host: string; total: number; start: { x: number; y: number } }
 const pendingDownloads: PendingDownload[] = []
 type JsDialog = { id: string; tabId: string; type: 'alert' | 'confirm' | 'prompt' | 'beforeunload'; message: string; defaultPrompt: string; host: string }
@@ -103,6 +104,7 @@ function publishSoon() {
 }
 
 function publicState() {
+  const activeTab = current()
   return {
     privateMode,
     activeId,
@@ -114,7 +116,8 @@ function publicState() {
     toolPopover,
     globalBassDb,
     globalBassFrequency,
-    certificate: current()?.certificate ?? { status: 'none' },
+    certificate: activeTab?.certificate ?? { status: 'none' },
+    pageSafety: pageSafety(activeTab),
     sessionDownloadIds: [...sessionDownloadIds],
     pendingDownload: pendingDownloads[0] ? { id: pendingDownloads[0].id, filename: pendingDownloads[0].filename, host: pendingDownloads[0].host, total: pendingDownloads[0].total } : null,
     jsDialog: pendingJsDialog,
@@ -122,8 +125,8 @@ function publicState() {
     swp: current()?.site ? { site: current()!.site!, adblock: adblockEnabled(current()!.site!), blockedSite: blockedAdsBySite.get(current()!.site!) ?? 0, blockedTotal: swpData().blockedTotal, popupBlockedTotal: swpData().popupBlockedTotal, listUpdatedAt: swpData().listUpdatedAt, listStatus: swpData().listStatus, permissions: swpData().permissions[current()!.site!] ?? {}, popup: popupFor(current()!.site!), clearOnExit: clearOnExit(current()!.site!), storage: storageBySite.get(current()!.site!) ?? { cookies: 0, bytes: 0 } } : null,
     library: getLibrary(),
     privacy: null,
-    tabs: tabs.map(({ id, title, url, favicon, loading, loadEpoch, audible, muted, bassDb, bassStatus, error, closing, view }) => ({
-      id, title, url, favicon, loading, loadEpoch, audible, muted, bassDb, bassStatus, error, closing,
+    tabs: tabs.map(({ id, title, url, favicon, loading, loadEpoch, audible, muted, bassDb, bassStatus, error, closing, hibernated, view }) => ({
+      id, title, url, favicon, loading, loadEpoch, audible, muted, bassDb, bassStatus, error, closing, hibernated,
       canGoBack: view?.webContents.navigationHistory.canGoBack() ?? false,
       canGoForward: view?.webContents.navigationHistory.canGoForward() ?? false,
     })),
@@ -137,9 +140,9 @@ function publish() {
 function stateFor(contents: Electron.WebContents) {
   const state = publicState()
   const library = getLibrary()
-  if (contents === window.webContents) return { ...state, privacy: null, library: { bookmarks: library.bookmarks, history: library.history.slice(0, 100), downloads: library.downloads.filter(entry => sessionDownloadIds.has(entry.id)), quickLinks: library.quickLinks, settings: library.settings } }
-  if (contents === panelView?.webContents) return { ...state, library: { bookmarks: panel === 'bookmarks' ? library.bookmarks : [], history: panel === 'history' ? library.history : [], downloads: [], quickLinks: [], settings: library.settings }, privacy: panel === 'privacy' && current()?.site ? { ...requestSummary(current()!.site!), protection: current()!.protection } : null }
-  if (contents === downloadsView?.webContents) return { ...state, library: { bookmarks: [], history: [], downloads: library.downloads.filter(entry => sessionDownloadIds.has(entry.id)), quickLinks: [], settings: library.settings }, privacy: null }
+  if (contents === window.webContents) return { ...state, privacy: null, library: { bookmarks: library.bookmarks, history: library.history.slice(0, 100), downloads: library.downloads, quickLinks: library.quickLinks, extensions: library.extensions, settings: library.settings } }
+  if (contents === panelView?.webContents) return { ...state, library: { bookmarks: panel === 'bookmarks' ? library.bookmarks : [], history: panel === 'history' ? library.history : [], downloads: [], quickLinks: [], extensions: panel === 'extensions' ? library.extensions : [], settings: library.settings }, privacy: panel === 'privacy' && current()?.site ? { ...requestSummary(current()!.site!), protection: current()!.protection } : null }
+  if (contents === downloadsView?.webContents) return { ...state, library: { bookmarks: [], history: [], downloads: library.downloads, quickLinks: [], extensions: [], settings: library.settings }, privacy: null }
   if (contents === toolView?.webContents) return { ...state, library: { bookmarks: [], history: [], downloads: [], quickLinks: [], settings: library.settings }, privacy: null }
   if (contents === downloadConfirmView?.webContents) return { ...state, tabs: [], library: { bookmarks: [], history: [], downloads: [], quickLinks: [], settings: library.settings }, privacy: null }
   if (contents === jsDialogView?.webContents) return { ...state, tabs: [], library: { bookmarks: [], history: [], downloads: [], quickLinks: [], settings: library.settings }, privacy: null }
@@ -388,7 +391,7 @@ function syncPanelOverlay() {
 }
 
 function setDownloadsOpen(open: boolean) {
-  downloadsOpen = open && sessionDownloadIds.size > 0
+  downloadsOpen = open && getLibrary().downloads.length > 0
   if (popupTimer) clearTimeout(popupTimer)
   if (downloadsOpen) {
     if (!downloadsView) downloadsView = overlayView('downloads')
@@ -423,7 +426,7 @@ function ensureToolView() {
 
 function scheduleDownloadsClose() {
   if (popupTimer) clearTimeout(popupTimer)
-  if (getLibrary().downloads.some(entry => sessionDownloadIds.has(entry.id) && entry.status === 'progressing')) return
+  if (getLibrary().downloads.some(entry => sessionDownloadIds.has(entry.id) && (entry.status === 'progressing' || entry.status === 'paused'))) return
   popupTimer = setTimeout(() => setDownloadsOpen(false), 3500)
 }
 
@@ -472,8 +475,15 @@ function showTab(id: string) {
   const next = tabs.find(tab => tab.id === id)
   if (!next || next.closing) return
   const previous = current()
+  if (previous && previous.id !== id) previous.lastActiveAt = Date.now()
   if (previous?.view) window.contentView.removeChildView(previous.view)
   activeId = id
+  next.lastActiveAt = Date.now()
+  if (next.hibernated && next.url !== HOME_URL) {
+    next.hibernated = false
+    attachPage(next)
+    void loadPage(next, next.url)
+  }
   sdt?.bind()
   if (toolPopover) { toolPopover = null; if (toolView && toolAttached) { window.contentView.removeChildView(toolView); toolAttached = false } }
   if (next.view) window.contentView.addChildView(next.view)
@@ -481,6 +491,28 @@ function showTab(id: string) {
   for (const [overlay, attached] of [[panelView, panelAttached], [downloadsView, downloadsAttached], [toolView, toolAttached]] as const) if (overlay && attached) { window.contentView.removeChildView(overlay); window.contentView.addChildView(overlay) }
   layout()
   publish()
+}
+
+function hibernateTab(tabId: string, automatic = false) {
+  const tab = tabs.find(item => item.id === tabId)
+  if (!tab || tab.id === activeId || tab.hibernated || !tab.view || tab.audible || tab.bassStatus === 'active' || [...downloadTabIds.values()].includes(tab.id)) {
+    if (!automatic && tab?.id === activeId) notice('Az aktív lap nem hibernálható.', 'error')
+    return
+  }
+  stopBass(tab, false)
+  const view = tab.view
+  tab.view = null
+  tab.hibernated = true; tab.loading = false; tab.audible = false
+  if (!view.webContents.isDestroyed()) view.webContents.close()
+  if (!automatic) notice(`Lap hibernálva: ${tab.title}`)
+  publish()
+}
+
+function runAutoHibernation() {
+  const minutes = getLibrary().settings.autoHibernateMinutes
+  if (!minutes) return
+  const threshold = Date.now() - minutes * 60_000
+  for (const tab of tabs) if (tab.id !== activeId && tab.lastActiveAt < threshold) hibernateTab(tab.id, true)
 }
 
 function configuredHome() { return getLibrary().settings.homepage === 'skipy' ? HOME_URL : getLibrary().settings.homepage }
@@ -527,6 +559,23 @@ function certificateKey(url: string) {
 function certificateForUrl(url: string): CertificateState {
   if (!/^https:\/\//i.test(url)) return { status: 'none' }
   return { status: 'loading', host: new URL(url).host }
+}
+function pageSafety(tab?: Tab) {
+  if (!tab || tab.url === HOME_URL) return { level: 'safe' as const, title: 'Skipy helyi oldal', reasons: ['Nem küld adatot külső webhelynek.'] }
+  const reasons: string[] = []
+  let level: 'safe' | 'warning' | 'danger' = 'safe'
+  try {
+    const parsed = new URL(tab.url)
+    if (parsed.protocol !== 'https:') { level = 'warning'; reasons.push('A kapcsolat nincs HTTPS-sel titkosítva.') }
+    if (parsed.username || parsed.password) { level = 'danger'; reasons.push('A webcím bejelentkezési adatot tartalmaz.') }
+    if (parsed.hostname.includes('xn--')) { if (level !== 'danger') level = 'warning'; reasons.push('A domain nemzetközi karakteres, ezért ellenőrizd a címét.') }
+    if (/^(\d{1,3}\.){3}\d{1,3}$/.test(parsed.hostname)) { if (level !== 'danger') level = 'warning'; reasons.push('A webhely domainnév helyett közvetlen IP-címet használ.') }
+    if (tab.certificate.status === 'error') { level = 'danger'; reasons.push('A HTTPS-tanúsítvány hibás.') }
+    else if (parsed.protocol === 'https:' && tab.certificate.status !== 'secure') { if (level !== 'danger') level = 'warning'; reasons.push('A tanúsítvány adatai nem ellenőrizhetők.') }
+    if (tab.site && !adblockEnabled(tab.site)) { if (level === 'safe') level = 'warning'; reasons.push('Az SWP védelem ezen a webhelyen ki van kapcsolva.') }
+  } catch { return { level: 'danger' as const, title: 'Érvénytelen webcím', reasons: ['A webcím nem értelmezhető biztonságosan.'] } }
+  if (!reasons.length) reasons.push('HTTPS-kapcsolat és aktív SWP védelem.')
+  return { level, title: level === 'safe' ? 'Nem találtunk helyi biztonsági problémát' : level === 'warning' ? 'Figyelmet igénylő oldal' : 'Veszélyes kapcsolat', reasons }
 }
 function monitorCertificate(tab: Tab, wc: Electron.WebContents) {
   const debuggerApi = wc.debugger
@@ -808,7 +857,7 @@ function attachPage(tab: Tab) {
 }
 
 function createTab(input = configuredHome(), activate = true) {
-  const tab: Tab = { id: String(nextId++), view: null, title: 'Új lap', url: input === HOME_URL ? HOME_URL : resolveInput(input), favicon: null, loading: false, loadEpoch: 0, audible: false, muted: false, bassDb: globalBassDb, bassStatus: 'off', audioView: null, certificate: certificateForUrl(input === HOME_URL ? HOME_URL : resolveInput(input)), certCandidates: new Map(), certReady: null, error: null, site: input === HOME_URL ? null : siteForUrl(resolveInput(input)), protection: 'pending', closing: false }
+  const tab: Tab = { id: String(nextId++), view: null, title: 'Új lap', url: input === HOME_URL ? HOME_URL : resolveInput(input), favicon: null, loading: false, loadEpoch: 0, audible: false, muted: false, bassDb: globalBassDb, bassStatus: 'off', audioView: null, certificate: certificateForUrl(input === HOME_URL ? HOME_URL : resolveInput(input)), certCandidates: new Map(), certReady: null, error: null, site: input === HOME_URL ? null : siteForUrl(resolveInput(input)), protection: 'pending', closing: false, hibernated: false, lastActiveAt: Date.now() }
   tabs.push(tab)
   if (input !== HOME_URL) {
     attachPage(tab)
@@ -943,13 +992,115 @@ function launchBrowserWindow(isPrivate: boolean) {
   }
 }
 
+async function loadSavedExtensions() {
+  for (const entry of getLibrary().extensions) {
+    if (!entry.enabled) continue
+    try {
+      const loaded = await session.defaultSession.extensions.loadExtension(entry.path, { allowFileAccess: true })
+      entry.id = loaded.id; entry.name = loaded.name
+    } catch { entry.enabled = false }
+  }
+  saveLibrary(); publish()
+}
+
+async function chooseExtension() {
+  const selected = await dialog.showOpenDialog(window, { title: 'Kicsomagolt bővítmény betöltése', properties: ['openDirectory'] })
+  if (selected.canceled || !selected.filePaths[0]) return
+  const extensionPath = selected.filePaths[0]
+  try {
+    const loaded = await session.defaultSession.extensions.loadExtension(extensionPath, { allowFileAccess: true })
+    const existing = getLibrary().extensions.find(entry => entry.path === extensionPath || entry.id === loaded.id)
+    if (existing) Object.assign(existing, { id: loaded.id, name: loaded.name, path: extensionPath, enabled: true })
+    else getLibrary().extensions.push({ id: loaded.id, name: loaded.name, path: extensionPath, enabled: true })
+    saveLibrary(); publish(); notice(`Bővítmény betöltve: ${loaded.name}`)
+  } catch (error) { notice(`A bővítmény nem tölthető be: ${error instanceof Error ? error.message : 'ismeretlen hiba'}`, 'error') }
+}
+
+async function toggleExtension(extensionId: string) {
+  const entry = getLibrary().extensions.find(value => value.id === extensionId)
+  if (!entry) return
+  try {
+    if (entry.enabled) { session.defaultSession.extensions.removeExtension(entry.id); entry.enabled = false }
+    else { const loaded = await session.defaultSession.extensions.loadExtension(entry.path, { allowFileAccess: true }); entry.id = loaded.id; entry.name = loaded.name; entry.enabled = true }
+    saveLibrary(); publish()
+  } catch (error) { notice(`A bővítmény állapota nem módosítható: ${error instanceof Error ? error.message : 'ismeretlen hiba'}`, 'error') }
+}
+
+function importedBookmarks(source: string, extension: string) {
+  const rows: { title: string; url: string }[] = []
+  if (extension === '.html' || extension === '.htm') {
+    const decode = (value: string) => value.replace(/&amp;/gi, '&').replace(/&quot;/gi, '"').replace(/&#39;|&apos;/gi, "'").replace(/&lt;/gi, '<').replace(/&gt;/gi, '>')
+    for (const match of source.matchAll(/<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
+      const url = decode(match[1]); const title = decode(match[2].replace(/<[^>]+>/g, '').trim()) || url
+      if (/^https?:\/\//i.test(url)) rows.push({ title: title.slice(0, 300), url })
+    }
+  } else {
+    const parsed = JSON.parse(source) as any
+    const visit = (node: any) => { if (!node || typeof node !== 'object') return; if (typeof node.url === 'string' && /^https?:\/\//i.test(node.url)) rows.push({ title: typeof node.name === 'string' && node.name ? node.name.slice(0, 300) : node.url, url: node.url }); if (Array.isArray(node.children)) node.children.forEach(visit); else for (const value of Object.values(node)) if (value && typeof value === 'object') visit(value) }
+    visit(parsed.roots ?? parsed)
+  }
+  return rows
+}
+
+async function importBrowserBookmarks() {
+  const selected = await dialog.showOpenDialog(window, { title: 'Könyvjelzők importálása másik böngészőből', properties: ['openFile'], filters: [{ name: 'Böngésző könyvjelzők', extensions: ['html', 'htm', 'json'] }] })
+  if (selected.canceled || !selected.filePaths[0]) return
+  try {
+    const sourcePath = selected.filePaths[0]
+    const rows = importedBookmarks(await fs.promises.readFile(sourcePath, 'utf8'), path.extname(sourcePath).toLowerCase())
+    const known = new Set(getLibrary().bookmarks.map(entry => entry.url)); let added = 0
+    for (const row of rows) if (!known.has(row.url)) { known.add(row.url); getLibrary().bookmarks.push({ id: id(), title: row.title, url: row.url, createdAt: Date.now() }); added++ }
+    saveLibrary(); publish(); notice(`${added} könyvjelző importálva.`)
+  } catch { notice('A kiválasztott böngészőadat nem olvasható.', 'error') }
+}
+
+async function exportBookmarks() {
+  const selected = await dialog.showSaveDialog(window, { title: 'Könyvjelzők exportálása', defaultPath: path.join(app.getPath('documents'), 'skipy-bookmarks.html'), filters: [{ name: 'Böngésző könyvjelzők', extensions: ['html'] }] })
+  if (selected.canceled || !selected.filePath) return
+  const escape = (value: string) => value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const links = getLibrary().bookmarks.map(entry => `<DT><A HREF="${escape(entry.url)}" ADD_DATE="${Math.floor(entry.createdAt / 1000)}">${escape(entry.title)}</A>`).join('\n')
+  await fs.promises.writeFile(selected.filePath, `<!DOCTYPE NETSCAPE-Bookmark-file-1>\n<META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=UTF-8">\n<TITLE>Skipy könyvjelzők</TITLE>\n<H1>Skipy könyvjelzők</H1>\n<DL><p>\n${links}\n</DL><p>\n`, 'utf8')
+  notice('A könyvjelzők exportálva.')
+}
+
+async function exportSkipyBackup() {
+  const selected = await dialog.showSaveDialog(window, { title: 'Skipy biztonsági mentés', defaultPath: path.join(app.getPath('documents'), 'skipy-backup.json'), filters: [{ name: 'Skipy biztonsági mentés', extensions: ['json'] }] })
+  if (selected.canceled || !selected.filePath) return
+  await fs.promises.writeFile(selected.filePath, JSON.stringify({ format: 'skipy-backup', version: 1, exportedAt: new Date().toISOString(), library: getLibrary() }, null, 2), 'utf8')
+  notice('A Skipy biztonsági mentés elkészült.')
+}
+
+let resetting = false
+async function resetBrowser() {
+  const answer = await dialog.showMessageBox(window, { type: 'warning', title: 'Skipy teljes visszaállítása', message: 'Minden helyi adat törlődik', detail: 'A könyvjelzők, előzmények, letöltési lista, bővítmények, beállítások, engedélyek és webhelyadatok végleg törlődnek.', buttons: ['Mégse', 'Teljes reset'], defaultId: 0, cancelId: 0, noLink: true })
+  if (answer.response !== 1) return
+  resetting = true
+  for (const extension of session.defaultSession.extensions.getAllExtensions()) session.defaultSession.extensions.removeExtension(extension.id)
+  await Promise.all([session.defaultSession.clearStorageData(), session.defaultSession.clearCache()]).catch(() => undefined)
+  try { fs.rmSync(path.join(app.getPath('userData'), 'skipy-data'), { recursive: true, force: true }) } catch { /* Relaunch will retry with a clean profile. */ }
+  dataFlushedForQuit = true
+  app.relaunch({ args: process.argv.slice(1).filter(argument => !argument.startsWith('--skipy-window=') && argument !== '--skipy-private') })
+  app.quit()
+}
+
+function configurePlatformQuickActions() {
+  if (process.platform === 'win32') app.setUserTasks([
+    { program: process.execPath, arguments: '--skipy-new-window', iconPath: process.execPath, iconIndex: 0, title: 'Új ablak', description: 'Új Skipy böngészőablak' },
+    { program: process.execPath, arguments: '--skipy-private', iconPath: process.execPath, iconIndex: 0, title: 'Új inkognitó ablak', description: 'Privát Skipy böngészés' },
+  ])
+  if (process.platform === 'darwin') app.dock?.setMenu(Menu.buildFromTemplate([
+    { label: 'Új ablak', click: () => launchBrowserWindow(false) },
+    { label: 'Új inkognitó ablak', click: () => launchBrowserWindow(true) },
+  ]))
+}
+
 function toggleBookmark() {
   const tab = current()
   if (!tab || !/^https?:\/\//i.test(tab.url)) return
   const bookmarks = getLibrary().bookmarks
   const index = bookmarks.findIndex(item => item.url === tab.url)
   if (index >= 0) { bookmarks.splice(index, 1); notice('Könyvjelző eltávolítva.') }
-  else { bookmarks.unshift({ id: id(), title: tab.title || tab.url, url: tab.url, createdAt: Date.now(), ...(tab.favicon ? { favicon: tab.favicon } : {}) }); notice('Könyvjelző hozzáadva.') }
+  else { bookmarks.unshift({ id: id(), title: tab.title || tab.url, url: tab.url, createdAt: Date.now(), folder: 'Kedvencek', ...(tab.favicon ? { favicon: tab.favicon } : {}) }); notice('Hozzáadva a Kedvencekhez.') }
   saveLibrary(); publish()
 }
 
@@ -1070,35 +1221,44 @@ async function clearSiteData(site: string) {
   storageBySite.set(site, { cookies: 0, bytes: 0 }); publish()
 }
 
-function activateDownload(pending: PendingDownload) {
+function activateDownload(pending: PendingDownload, customPath?: string) {
   const { item } = pending
-  const savePath = uniqueDownloadPath(pending.filename)
+  const savePath = customPath || uniqueDownloadPath(pending.filename)
   item.setSavePath(savePath)
   const entry: DownloadEntry = { id: id(), name: path.basename(savePath), path: savePath, url: item.getURL(), received: 0, total: item.getTotalBytes(), status: 'progressing', startedAt: Date.now() }
   getLibrary().downloads.unshift(entry)
   sessionDownloadIds.add(entry.id)
   runningDownloads.set(entry.id, item)
+  const sourceTab = tabs.find(tab => tab.view?.webContents.id === pending.contents?.id)
+  if (sourceTab) downloadTabIds.set(entry.id, sourceTab.id)
   setDownloadsOpen(true)
   flyDownload(pending.start)
   item.on('updated', (_event, status) => {
     entry.received = item.getReceivedBytes(); entry.total = item.getTotalBytes()
-    if (status === 'interrupted') entry.status = 'interrupted'
+    entry.status = item.isPaused() ? 'paused' : status === 'interrupted' ? 'interrupted' : 'progressing'
     publish()
   })
   item.on('done', (_event, status) => {
     entry.received = item.getReceivedBytes(); entry.total = item.getTotalBytes(); entry.status = status
     notice(status === 'completed' ? `Letöltve: ${entry.name}` : `A letöltés ${status === 'cancelled' ? 'megszakadt' : 'nem sikerült'}.`, status === 'completed' ? 'success' : 'error')
-    runningDownloads.delete(entry.id); scheduleDownloadsClose(); saveLibrary(); publish()
+    runningDownloads.delete(entry.id); downloadTabIds.delete(entry.id); scheduleDownloadsClose(); saveLibrary(); publish()
   })
   saveLibrary(); item.resume(); publish()
 }
 
-function decideDownload(pendingId: string, allow: boolean) {
+async function decideDownload(pendingId: string, mode: 'default' | 'custom' | 'reject') {
   const index = pendingDownloads.findIndex(entry => entry.id === pendingId)
   if (index < 0) return
-  const [pending] = pendingDownloads.splice(index, 1)
-  if (allow) activateDownload(pending)
-  else pending.item.cancel()
+  const pending = pendingDownloads[index]
+  let customPath: string | undefined
+  if (mode === 'custom') {
+    const result = await dialog.showSaveDialog(window, { title: 'Letöltés mentése', defaultPath: path.join(app.getPath('downloads'), pending.filename) })
+    if (result.canceled || !result.filePath) return
+    customPath = result.filePath
+  }
+  pendingDownloads.splice(index, 1)
+  if (mode === 'reject') pending.item.cancel()
+  else activateDownload(pending, customPath)
   syncDownloadConfirmation()
 }
 
@@ -1128,6 +1288,8 @@ if (hasSingleInstanceLock) void app.whenReady().then(() => {
   loadLibrary()
   loadPrivacy()
   loadSwp()
+  void loadSavedExtensions()
+  configurePlatformQuickActions()
   void updateLists().then(() => publish())
   ipcMain.on('privacy:fingerprint-config', event => {
     const tab = tabs.find(item => item.view?.webContents.id === event.sender.id)
@@ -1235,6 +1397,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(() => {
   })
   void window.loadFile(path.join(__dirname, '..', 'dist', 'index.html'))
   createTab()
+  setInterval(runAutoHibernation, 60_000).unref()
 
   ipcMain.handle('browser:command', (event, action: unknown, value: unknown) => {
     if (event.sender !== window.webContents && event.sender !== panelView?.webContents && event.sender !== downloadsView?.webContents && event.sender !== toolView?.webContents && event.sender !== downloadConfirmView?.webContents && event.sender !== jsDialogView?.webContents && event.sender !== swpPromptView?.webContents && event.sender !== suggestionsView?.webContents || typeof action !== 'string') return
@@ -1246,8 +1409,38 @@ if (hasSingleInstanceLock) void app.whenReady().then(() => {
       else sdt?.bind()
       saveLibrary(); publish(); return
     }
+    if (action === 'onboarding-complete') { if (event.sender === window.webContents) { getLibrary().settings.onboardingComplete = true; saveLibrary(); publish() } return }
+    if (action === 'settings-hibernation') {
+      if (event.sender !== panelView?.webContents) return
+      const minutes = Number(text)
+      if ([0, 5, 15, 30, 60].includes(minutes)) { getLibrary().settings.autoHibernateMinutes = minutes; saveLibrary(); publish() }
+      return
+    }
+    if (action === 'tab-context-menu') {
+      if (event.sender !== window.webContents) return
+      const tab = tabs.find(item => item.id === text); if (!tab) return
+      Menu.buildFromTemplate([
+        { label: tab.hibernated ? 'Lap felébresztése' : 'Lap hibernálása', enabled: tab.id !== activeId || tab.hibernated, click: () => tab.hibernated ? showTab(tab.id) : hibernateTab(tab.id) },
+        { label: 'Újratöltés', enabled: !tab.hibernated, click: () => tab.view?.webContents.reload() },
+        { type: 'separator' }, { label: 'Lap bezárása', click: () => closeTab(tab.id) },
+      ]).popup({ window })
+      return
+    }
+    if (action === 'hibernate-tab') { if (event.sender === window.webContents) hibernateTab(text); return }
     if (action === 'new-window') { if (event.sender === window.webContents) launchBrowserWindow(false); return }
     if (action === 'new-private-window') { if (event.sender === window.webContents) launchBrowserWindow(true); return }
+    if (action === 'extension-add') { if (event.sender === panelView?.webContents || event.sender === window.webContents) void chooseExtension(); return }
+    if (action === 'extension-toggle') { if (event.sender === panelView?.webContents) void toggleExtension(text); return }
+    if (action === 'extension-remove') {
+      if (event.sender !== panelView?.webContents) return
+      const index = getLibrary().extensions.findIndex(entry => entry.id === text)
+      if (index >= 0) { const [entry] = getLibrary().extensions.splice(index, 1); if (entry.enabled) session.defaultSession.extensions.removeExtension(entry.id); saveLibrary(); publish() }
+      return
+    }
+    if (action === 'browser-import') { if (event.sender === panelView?.webContents) void importBrowserBookmarks(); return }
+    if (action === 'bookmarks-export') { if (event.sender === panelView?.webContents) void exportBookmarks().catch(() => notice('Az exportálás nem sikerült.', 'error')); return }
+    if (action === 'backup-export') { if (event.sender === panelView?.webContents) void exportSkipyBackup().catch(() => notice('A biztonsági mentés nem sikerült.', 'error')); return }
+    if (action === 'browser-reset') { if (event.sender === panelView?.webContents) void resetBrowser(); return }
     if (action === 'sdt-toggle') {
       if (event.sender === window.webContents && getLibrary().settings.developerMode) sdt?.toggle()
       return
@@ -1334,7 +1527,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(() => {
     else if (action === 'forward') current()?.view?.webContents.navigationHistory.goForward()
     else if (action === 'reload') current()?.view?.webContents.reload()
     else if (action === 'panel') {
-      if (text === 'bookmarks' || text === 'history' || text === 'settings' || text === 'privacy') panel = panel === text ? null : text
+      if (text === 'bookmarks' || text === 'history' || text === 'settings' || text === 'privacy' || text === 'extensions') panel = panel === text ? null : text
       else if (text === 'close') panel = null
       syncPanelOverlay()
       layout()
@@ -1342,8 +1535,8 @@ if (hasSingleInstanceLock) void app.whenReady().then(() => {
     }
     else if (action === 'downloads-toggle') setDownloadsOpen(!downloadsOpen)
     else if (action === 'downloads-close') setDownloadsOpen(false)
-    else if (action === 'download-confirm' || action === 'download-reject') {
-      if (event.sender === downloadConfirmView?.webContents && pendingDownloads[0]?.id === text) decideDownload(text, action === 'download-confirm')
+    else if (action === 'download-confirm' || action === 'download-confirm-custom' || action === 'download-reject') {
+      if (event.sender === downloadConfirmView?.webContents && pendingDownloads[0]?.id === text) void decideDownload(text, action === 'download-confirm' ? 'default' : action === 'download-confirm-custom' ? 'custom' : 'reject')
       return
     }
     else if (action === 'js-dialog-answer') {
@@ -1373,6 +1566,9 @@ if (hasSingleInstanceLock) void app.whenReady().then(() => {
       return
     }
     else if (action === 'bookmark-toggle') toggleBookmark()
+    else if (action === 'bookmark-folder') {
+      try { const value=JSON.parse(text) as {id?:unknown;folder?:unknown};const entry=typeof value.id==='string'?getLibrary().bookmarks.find(item=>item.id===value.id):undefined;const folder=typeof value.folder==='string'?value.folder.trim().slice(0,60):'';if(entry){entry.folder=folder||'Kedvencek';saveLibrary()} } catch { /* Ignore malformed folder updates. */ }
+    }
     else if (action === 'quicklink-save') {
       let draft: { id?: unknown; title?: unknown; url?: unknown }
       try { draft = JSON.parse(text) } catch { return 'Érvénytelen gyors elérés.' }
@@ -1415,9 +1611,22 @@ if (hasSingleInstanceLock) void app.whenReady().then(() => {
       if (entry) navigate(entry.url)
     }
     else if (action === 'download-cancel') runningDownloads.get(text)?.cancel()
+    else if (action === 'download-pause') { const item = runningDownloads.get(text); if (item && !item.isPaused()) { item.pause(); const entry = getLibrary().downloads.find(value => value.id === text); if (entry) entry.status = 'paused' } }
+    else if (action === 'download-resume') { const item = runningDownloads.get(text); if (item?.canResume()) { item.resume(); const entry = getLibrary().downloads.find(value => value.id === text); if (entry) entry.status = 'progressing' } }
     else if (action === 'download-reveal') {
       const entry = getLibrary().downloads.find(item => item.id === text && item.status === 'completed')
-      if (entry && fs.existsSync(entry.path)) shell.showItemInFolder(entry.path)
+      if (!entry) return
+      if (fs.existsSync(entry.path)) shell.showItemInFolder(entry.path)
+      else notice('A letöltött fájl már nem található ezen a helyen.', 'error')
+    }
+    else if (action === 'downloads-clear-finished') {
+      const items = getLibrary().downloads
+      const retained = items.filter(item => item.status === 'progressing' || item.status === 'paused')
+      if (retained.length !== items.length) {
+        items.splice(0, items.length, ...retained)
+        for (const id of [...sessionDownloadIds]) if (!retained.some(item => item.id === id)) sessionDownloadIds.delete(id)
+        saveLibrary(); notice('A befejezett letöltési előzmények törölve.')
+      }
     }
     else if (action === 'download-remove') {
       const items = getLibrary().downloads
@@ -1464,6 +1673,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(() => {
 
 let dataFlushedForQuit = false
 app.on('before-quit', event => {
+  if (resetting) return
   flushPrivacy()
   if (dataFlushedForQuit) return
   event.preventDefault()
@@ -1477,7 +1687,9 @@ app.on('quit', () => {
   if (disposableRoot) { try { fs.rmSync(disposableRoot, { recursive: true, force: true }) } catch { /* Chromium may still be releasing a file handle. */ } }
 })
 app.on('window-all-closed', () => app.quit())
-app.on('second-instance', () => {
+app.on('second-instance', (_event, commandLine) => {
+  if (commandLine.includes('--skipy-private')) { launchBrowserWindow(true); return }
+  if (commandLine.includes('--skipy-new-window')) { launchBrowserWindow(false); return }
   if (!window || window.isDestroyed()) return
   if (window.isMinimized()) window.restore()
   window.show()
