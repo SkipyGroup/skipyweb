@@ -16,10 +16,13 @@
           <button id="reload" title="Újratöltés" aria-label="Újratöltés"><i data-lucide="rotate-cw"></i></button>
           <button id="home" title="Kezdőlap" aria-label="Kezdőlap"><i data-lucide="house"></i></button>
         </div>
-        <div class="tabs" id="tabs"></div>
+        <div class="tab-rail">
+          <div class="tabs" id="tabs"></div>
+          <button id="new-tab" class="tool-action tab-new-button" title="Új lap (Ctrl+T)" aria-label="Új lap"><i data-lucide="plus"></i></button>
+          <details id="create-menu" class="create-menu"><summary class="tool-action" title="További lapműveletek" aria-label="További lapműveletek"><i data-lucide="ellipsis"></i></summary><div><button id="new-window"><i data-lucide="panels-top-left"></i><span>Új ablak<kbd>Ctrl+N</kbd></span></button><button id="new-private-window"><i data-lucide="venetian-mask"></i><span>Új inkognitó ablak<kbd>Ctrl+Shift+N</kbd></span></button></div></details>
+        </div>
         <div class="library-actions">
           <span id="private-indicator" class="private-indicator" hidden><i data-lucide="venetian-mask"></i><b>INKOGNITÓ</b></span>
-          <details id="create-menu" class="create-menu"><summary class="tool-action" title="Új lap vagy ablak" aria-label="Új lap vagy ablak"><i data-lucide="plus"></i></summary><div><button id="menu-new-tab"><i data-lucide="plus"></i><span>Új lap<kbd>Ctrl+T</kbd></span></button><button id="new-window"><i data-lucide="panels-top-left"></i><span>Új ablak<kbd>Ctrl+N</kbd></span></button><button id="new-private-window"><i data-lucide="venetian-mask"></i><span>Új inkognitó ablak<kbd>Ctrl+Shift+N</kbd></span></button></div></details>
           <button id="show-sdt" class="tool-action" title="SDT · Skipy Developer Tools (Ctrl+Shift+D)" aria-label="Skipy Developer Tools" aria-pressed="false" hidden><i data-lucide="code-xml"></i></button>
           <button id="show-bass" class="tool-action" title="Bass Booster" aria-label="Bass Booster"><i data-lucide="audio-lines"></i></button>
           <button id="show-privacy" class="tool-action" title="Adatvédelem" aria-label="Adatvédelem"><i data-lucide="shield"></i></button>

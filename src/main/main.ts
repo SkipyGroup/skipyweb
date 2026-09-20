@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { createHmac } from 'node:crypto'
+import extract from 'extract-zip'
 import { resolveInput as resolveAddress } from './input'
 import { flushLibrary, getLibrary, id, loadLibrary, saveLibrary, validFavicon, type DownloadEntry } from './library'
 import { clearRequests, flushPrivacy, hostForUrl, isBlocked, isFingerprintEnabled, loadPrivacy, recordRequest, requestSummary, secret, setFingerprintEnabled, siteForUrl, toggleBlock } from './privacy'
@@ -33,6 +34,7 @@ app.setPath('sessionData', sessionDataPath)
 app.commandLine.appendSwitch('disk-cache-dir', path.join(sessionDataPath, 'Cache'))
 const hasSingleInstanceLock = windowToken ? true : app.requestSingleInstanceLock()
 if (!hasSingleInstanceLock) app.quit()
+let pendingExternalUrl = process.argv.find(argument => /^https?:\/\//i.test(argument)) || ''
 type CertificateState = { status: 'none' | 'loading' | 'secure' | 'error' | 'unavailable'; host?: string; subject?: string; issuer?: string; validFrom?: number; validTo?: number; protocol?: string; cipher?: string; error?: string }
 type Tab = { id: string; view: WebContentsView | null; title: string; url: string; favicon: string | null; loading: boolean; loadEpoch: number; audible: boolean; muted: boolean; bassDb: number; bassStatus: 'off' | 'starting' | 'active' | 'error'; audioView: WebContentsView | null; certificate: CertificateState; certCandidates: Map<string, CertificateState>; certReady: Promise<void> | null; error: string | null; site: string | null; protection: 'active' | 'error' | 'pending'; closing: boolean; hibernated: boolean; lastActiveAt: number }
 const tabs: Tab[] = []
@@ -107,6 +109,7 @@ function publicState() {
   const activeTab = current()
   return {
     privateMode,
+    defaultBrowser: !privateMode && app.isDefaultProtocolClient('http') && app.isDefaultProtocolClient('https'),
     activeId,
     sdtOpen: sdt?.isOpen ?? false,
     maximized: window?.isMaximized() ?? false,
@@ -1016,6 +1019,66 @@ async function chooseExtension() {
   } catch (error) { notice(`A bővítmény nem tölthető be: ${error instanceof Error ? error.message : 'ismeretlen hiba'}`, 'error') }
 }
 
+function chromeExtensionId(value: string) {
+  const trimmed = value.trim()
+  const direct = trimmed.match(/^[a-p]{32}$/i)?.[0]
+  if (direct) return direct.toLowerCase()
+  try {
+    const parsed = new URL(trimmed)
+    if (!['chromewebstore.google.com', 'chrome.google.com'].includes(parsed.hostname.toLowerCase())) return null
+    return parsed.pathname.match(/\/([a-p]{32})(?:\/|$)/i)?.[1]?.toLowerCase() ?? null
+  } catch { return null }
+}
+
+function crxZipOffset(buffer: Buffer) {
+  if (buffer.length < 16 || buffer.toString('ascii', 0, 4) !== 'Cr24') throw new Error('A letöltött fájl nem érvényes CRX csomag.')
+  const version = buffer.readUInt32LE(4)
+  if (version === 3) return 12 + buffer.readUInt32LE(8)
+  if (version === 2) return 16 + buffer.readUInt32LE(8) + buffer.readUInt32LE(12)
+  throw new Error(`Nem támogatott CRX-verzió: ${version}`)
+}
+
+async function installWebStoreExtension(value: string) {
+  const extensionId = chromeExtensionId(value)
+  if (!extensionId) return 'Illessz be egy Chrome Web Store-linket vagy egy 32 karakteres bővítményazonosítót.'
+  const answer = await dialog.showMessageBox(window, { type: 'question', title: 'Bővítmény telepítése', message: 'Telepíted ezt a Chrome Web Store-bővítményt?', detail: `${extensionId}\n\nA Skipy csak az Electron által támogatott bővítményfunkciókat tudja futtatni.`, buttons: ['Mégse', 'Letöltés és telepítés'], defaultId: 1, cancelId: 0, noLink: true })
+  if (answer.response !== 1) return
+  const extensionsRoot = path.join(app.getPath('userData'), 'skipy-extensions')
+  const temporaryRoot = path.join(extensionsRoot, `.install-${extensionId}-${Date.now()}`)
+  const archivePath = path.join(app.getPath('temp'), `skipy-${extensionId}-${Date.now()}.zip`)
+  try {
+    notice('Bővítmény letöltése…')
+    const query = encodeURIComponent(`id=${extensionId}&uc`)
+    const downloadUrl = `https://clients2.google.com/service/update2/crx?response=redirect&prodversion=140.0.0.0&acceptformat=crx2,crx3&x=${query}`
+    const response = await net.fetch(downloadUrl, { redirect: 'follow', signal: AbortSignal.timeout(30_000) })
+    if (!response.ok) throw new Error(`A Web Store ${response.status} hibát adott.`)
+    const bytes = Buffer.from(await response.arrayBuffer())
+    if (bytes.length > 100 * 1024 * 1024) throw new Error('A bővítmény nagyobb 100 MB-nál.')
+    const offset = crxZipOffset(bytes)
+    if (offset >= bytes.length || bytes.readUInt32LE(offset) !== 0x04034b50) throw new Error('A CRX csomag ZIP-tartalma sérült.')
+    await fs.promises.mkdir(temporaryRoot, { recursive: true })
+    await fs.promises.writeFile(archivePath, bytes.subarray(offset))
+    await extract(archivePath, { dir: temporaryRoot })
+    const manifestPath = path.join(temporaryRoot, 'manifest.json')
+    const manifest = JSON.parse(await fs.promises.readFile(manifestPath, 'utf8')) as { name?: unknown; manifest_version?: unknown }
+    if (typeof manifest.name !== 'string' || ![2, 3].includes(Number(manifest.manifest_version))) throw new Error('A manifest.json nem támogatott.')
+    const target = path.join(extensionsRoot, extensionId)
+    const old = getLibrary().extensions.find(entry => entry.path === target || entry.id === extensionId)
+    if (old?.enabled) session.defaultSession.extensions.removeExtension(old.id)
+    await fs.promises.rm(target, { recursive: true, force: true })
+    await fs.promises.rename(temporaryRoot, target)
+    const loaded = await session.defaultSession.extensions.loadExtension(target, { allowFileAccess: true })
+    if (old) Object.assign(old, { id: loaded.id, name: loaded.name, path: target, enabled: true })
+    else getLibrary().extensions.push({ id: loaded.id, name: loaded.name, path: target, enabled: true })
+    saveLibrary(); publish(); notice(`Bővítmény telepítve: ${loaded.name}`, 'success')
+  } catch (error) {
+    await fs.promises.rm(temporaryRoot, { recursive: true, force: true }).catch(() => undefined)
+    const message = error instanceof Error ? error.message : 'ismeretlen hiba'
+    notice(`A telepítés nem sikerült: ${message}`, 'error')
+    return message
+  } finally { await fs.promises.rm(archivePath, { force: true }).catch(() => undefined) }
+}
+
 async function toggleExtension(extensionId: string) {
   const entry = getLibrary().extensions.find(value => value.id === extensionId)
   if (!entry) return
@@ -1240,6 +1303,8 @@ function activateDownload(pending: PendingDownload, customPath?: string) {
   })
   item.on('done', (_event, status) => {
     entry.received = item.getReceivedBytes(); entry.total = item.getTotalBytes(); entry.status = status
+    const actualPath = item.getSavePath()
+    if (actualPath) { entry.path = actualPath; entry.name = path.basename(actualPath) }
     notice(status === 'completed' ? `Letöltve: ${entry.name}` : `A letöltés ${status === 'cancelled' ? 'megszakadt' : 'nem sikerült'}.`, status === 'completed' ? 'success' : 'error')
     runningDownloads.delete(entry.id); downloadTabIds.delete(entry.id); scheduleDownloadsClose(); saveLibrary(); publish()
   })
@@ -1396,7 +1461,8 @@ if (hasSingleInstanceLock) void app.whenReady().then(() => {
     setTimeout(() => ensureSuggestionsView(), 1450)
   })
   void window.loadFile(path.join(__dirname, '..', 'dist', 'index.html'))
-  createTab()
+  createTab(pendingExternalUrl || undefined)
+  pendingExternalUrl = ''
   setInterval(runAutoHibernation, 60_000).unref()
 
   ipcMain.handle('browser:command', (event, action: unknown, value: unknown) => {
@@ -1416,6 +1482,16 @@ if (hasSingleInstanceLock) void app.whenReady().then(() => {
       if ([0, 5, 15, 30, 60].includes(minutes)) { getLibrary().settings.autoHibernateMinutes = minutes; saveLibrary(); publish() }
       return
     }
+    if (action === 'settings-default-browser') {
+      if (event.sender !== panelView?.webContents || privateMode) return
+      const registered = app.setAsDefaultProtocolClient('http') && app.setAsDefaultProtocolClient('https')
+      if (process.platform === 'win32') {
+        void shell.openExternal('ms-settings:defaultapps?registeredAppUser=Skipy%20Browser').catch(() => shell.openExternal('ms-settings:defaultapps'))
+        notice(registered ? 'Válaszd ki a Skipy Browsert a Windows alapértelmezett böngészőjeként.' : 'A böngésző regisztrálása nem sikerült.', registered ? 'success' : 'error')
+      } else if (process.platform === 'darwin') notice(registered ? 'A Skipy Browser lett az alapértelmezett böngésző.' : 'Az alapértelmezett böngésző beállítása nem sikerült.', registered ? 'success' : 'error')
+      else notice(registered ? 'A Skipy Browser regisztrálva.' : 'A beállítás nem sikerült.', registered ? 'success' : 'error')
+      publish(); return
+    }
     if (action === 'tab-context-menu') {
       if (event.sender !== window.webContents) return
       const tab = tabs.find(item => item.id === text); if (!tab) return
@@ -1430,6 +1506,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(() => {
     if (action === 'new-window') { if (event.sender === window.webContents) launchBrowserWindow(false); return }
     if (action === 'new-private-window') { if (event.sender === window.webContents) launchBrowserWindow(true); return }
     if (action === 'extension-add') { if (event.sender === panelView?.webContents || event.sender === window.webContents) void chooseExtension(); return }
+    if (action === 'extension-store-install') { if (event.sender === panelView?.webContents) return installWebStoreExtension(text) }
     if (action === 'extension-toggle') { if (event.sender === panelView?.webContents) void toggleExtension(text); return }
     if (action === 'extension-remove') {
       if (event.sender !== panelView?.webContents) return
@@ -1616,7 +1693,12 @@ if (hasSingleInstanceLock) void app.whenReady().then(() => {
     else if (action === 'download-reveal') {
       const entry = getLibrary().downloads.find(item => item.id === text && item.status === 'completed')
       if (!entry) return
-      if (fs.existsSync(entry.path)) shell.showItemInFolder(entry.path)
+      let storedPath = entry.path
+      if (!fs.existsSync(storedPath)) {
+        const downloadsPath = path.join(app.getPath('downloads'), path.basename(entry.name))
+        if (fs.existsSync(downloadsPath)) { storedPath = downloadsPath; entry.path = downloadsPath; saveLibrary() }
+      }
+      if (fs.existsSync(storedPath)) shell.showItemInFolder(storedPath)
       else notice('A letöltött fájl már nem található ezen a helyen.', 'error')
     }
     else if (action === 'downloads-clear-finished') {
@@ -1694,4 +1776,12 @@ app.on('second-instance', (_event, commandLine) => {
   if (window.isMinimized()) window.restore()
   window.show()
   window.focus()
+  const externalUrl = commandLine.find(argument => /^https?:\/\//i.test(argument))
+  if (externalUrl) createTab(externalUrl)
+})
+app.on('open-url', (event, url) => {
+  event.preventDefault()
+  if (!/^https?:\/\//i.test(url)) return
+  if (app.isReady() && window && !window.isDestroyed()) createTab(url)
+  else pendingExternalUrl = url
 })

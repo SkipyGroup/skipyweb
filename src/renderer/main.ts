@@ -1,8 +1,8 @@
-﻿import './style.css'
-import { createIcons, ArrowLeft, ArrowRight, RotateCw, House, Shield, Bookmark, BookOpen, History, Download, SlidersHorizontal, Minus, Square, X, Globe, Search, Grid2X2, Plus, Pencil, Trash2, Copy, Star, Volume2, VolumeX, AudioLines, LockKeyhole, TriangleAlert, CodeXml, PanelsTopLeft, VenetianMask, Puzzle } from 'lucide'
+import './style.css'
+import { createIcons, ArrowLeft, ArrowRight, RotateCw, House, Shield, Bookmark, BookOpen, History, Download, SlidersHorizontal, Minus, Square, X, Globe, Search, Grid2X2, Plus, Ellipsis, Pencil, Trash2, Copy, Star, Volume2, VolumeX, AudioLines, LockKeyhole, TriangleAlert, CodeXml, PanelsTopLeft, VenetianMask, Puzzle } from 'lucide'
 import { classifyInput } from '../main/input'
 
-const iconSet = { ArrowLeft, ArrowRight, RotateCw, House, Shield, Bookmark, BookOpen, History, Download, SlidersHorizontal, Minus, Square, X, Globe, Search, Grid2X2, Plus, Pencil, Trash2, Copy, Star, Volume2, VolumeX, AudioLines, LockKeyhole, TriangleAlert, CodeXml, PanelsTopLeft, VenetianMask, Puzzle }
+const iconSet = { ArrowLeft, ArrowRight, RotateCw, House, Shield, Bookmark, BookOpen, History, Download, SlidersHorizontal, Minus, Square, X, Globe, Search, Grid2X2, Plus, Ellipsis, Pencil, Trash2, Copy, Star, Volume2, VolumeX, AudioLines, LockKeyhole, TriangleAlert, CodeXml, PanelsTopLeft, VenetianMask, Puzzle }
 function renderIcons() { createIcons({ icons: iconSet, attrs: { 'stroke-width': 2 } }) }
 function icon(name: string) {
   const element = document.createElement('i')
@@ -18,7 +18,7 @@ type HistoryEntry = { id: string; title: string; url: string; visitedAt: number;
 type DownloadEntry = { id: string; name: string; path: string; url: string; received: number; total: number; status: 'progressing' | 'paused' | 'completed' | 'cancelled' | 'interrupted'; startedAt: number }
 type QuickLink = { id: string; title: string; url: string }
 type Privacy = { site: string; protection: 'active' | 'error' | 'pending'; fingerprintEnabled: boolean; blockedHosts: string[]; rows: { site: string; host: string; count: number; blocked: number; lastSeen: number; blockedNow: boolean }[] }
-type State = { privateMode: boolean; activeId: string; sdtOpen: boolean; globalBassDb: number; globalBassFrequency: number; maximized: boolean; fullscreenMode: 'none' | 'app' | 'video'; tabs: Tab[]; panel: 'bookmarks' | 'history' | 'downloads' | 'settings' | 'privacy' | 'extensions' | null; downloadsOpen: boolean; sessionDownloadIds: string[]; pendingDownload: { id: string; filename: string; host: string; total: number } | null; toolPopover: 'certificate' | 'bass' | null; certificate: CertificateState; pageSafety: { level: 'safe' | 'warning' | 'danger'; title: string; reasons: string[] }; privacy: Privacy | null; swp: { adblock:boolean; listStatus:'bundled'|'updated'|'error' } | null; library: { bookmarks: Bookmark[]; history: HistoryEntry[]; downloads: DownloadEntry[]; quickLinks: QuickLink[]; extensions: {id:string;name:string;path:string;enabled:boolean}[]; settings: { searchEngine: 'google' | 'duckduckgo' | 'bing'; homepage: string; developerMode: boolean; onboardingComplete: boolean; autoHibernateMinutes: number } } }
+type State = { privateMode: boolean; defaultBrowser: boolean; activeId: string; sdtOpen: boolean; globalBassDb: number; globalBassFrequency: number; maximized: boolean; fullscreenMode: 'none' | 'app' | 'video'; tabs: Tab[]; panel: 'bookmarks' | 'history' | 'downloads' | 'settings' | 'privacy' | 'extensions' | null; downloadsOpen: boolean; sessionDownloadIds: string[]; pendingDownload: { id: string; filename: string; host: string; total: number } | null; toolPopover: 'certificate' | 'bass' | null; certificate: CertificateState; pageSafety: { level: 'safe' | 'warning' | 'danger'; title: string; reasons: string[] }; privacy: Privacy | null; swp: { adblock:boolean; listStatus:'bundled'|'updated'|'error' } | null; library: { bookmarks: Bookmark[]; history: HistoryEntry[]; downloads: DownloadEntry[]; quickLinks: QuickLink[]; extensions: {id:string;name:string;path:string;enabled:boolean}[]; settings: { searchEngine: 'google' | 'duckduckgo' | 'bing'; homepage: string; developerMode: boolean; onboardingComplete: boolean; autoHibernateMinutes: number } } }
 type BrowserBridge = {
   command: (action: string, value?: string) => Promise<State | string | void>
   onState: (callback: (state: State) => void) => () => void
@@ -38,7 +38,7 @@ if (overlayMode === 'panel' || overlayMode === 'downloads' || overlayMode === 't
 let overlayClosing = false
 let lastOverlayPanel: State['panel'] = null
 const tabElements = new Map<string, HTMLElement>()
-let state: State = { privateMode: false, activeId: '', sdtOpen: false, globalBassDb: 0, globalBassFrequency: 95, maximized: false, fullscreenMode: 'none', tabs: [], panel: null, downloadsOpen: false, sessionDownloadIds: [], pendingDownload: null, toolPopover: null, certificate: { status: 'none' }, pageSafety: {level:'safe',title:'',reasons:[]}, privacy: null, swp: null, library: { bookmarks: [], history: [], downloads: [], quickLinks: [], extensions: [], settings: { searchEngine: 'google', homepage: 'skipy', developerMode: false, onboardingComplete: false, autoHibernateMinutes: 15 } } }
+let state: State = { privateMode: false, defaultBrowser: false, activeId: '', sdtOpen: false, globalBassDb: 0, globalBassFrequency: 95, maximized: false, fullscreenMode: 'none', tabs: [], panel: null, downloadsOpen: false, sessionDownloadIds: [], pendingDownload: null, toolPopover: null, certificate: { status: 'none' }, pageSafety: {level:'safe',title:'',reasons:[]}, privacy: null, swp: null, library: { bookmarks: [], history: [], downloads: [], quickLinks: [], extensions: [], settings: { searchEngine: 'google', homepage: 'skipy', developerMode: false, onboardingComplete: false, autoHibernateMinutes: 15 } } }
 let homeModeDraft: 'skipy' | 'custom' | null = null
 let homepageDraft: string | null = null
 let settingsError = ''
@@ -754,7 +754,7 @@ $('show-sdt').addEventListener('click', () => command('sdt-toggle'))
 $('show-privacy').addEventListener('click', () => command('panel', 'privacy'))
 $('new-window').addEventListener('click', () => command('new-window'))
 $('new-private-window').addEventListener('click', () => command('new-private-window'))
-$('menu-new-tab').addEventListener('click', () => { command('new'); focusAddress() })
+$('new-tab').addEventListener('click', () => { command('new'); focusAddress() })
 document.querySelectorAll('#create-menu button').forEach(button => button.addEventListener('click', () => { ($('create-menu') as HTMLDetailsElement).open = false }))
 $('panel-close').addEventListener('click', () => command(overlayMode === 'downloads' ? 'downloads-close' : 'panel', overlayMode === 'downloads' ? undefined : 'close'))
 window.addEventListener('resize', updateDownloadsButton)
