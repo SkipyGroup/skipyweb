@@ -49,7 +49,7 @@ export class SdtController {
     try {
       const payload = JSON.parse(params.payload) as { token?: unknown; event?: unknown }
       const event = payload.event as Extract<SdtPageEvent, { kind: 'step' }> | undefined
-      if (payload.token !== this.token || !event || event.kind !== 'step' || typeof event.eventId !== 'string' || event.eventId.length > 100 || !Number.isFinite(event.at) || !event.step || !['click', 'input'].includes(event.step.kind)) return
+      if (payload.token !== this.token || !event || event.kind !== 'step' || typeof event.eventId !== 'string' || event.eventId.length > 100 || !Number.isFinite(event.at) || !event.step || !['click','input','select','check','key'].includes(event.step.kind)) return
       if (typeof event.step.selector !== 'string' || !event.step.selector || event.step.selector.length > 2048) return
       if (event.step.value !== undefined && (typeof event.step.value !== 'string' || event.step.value.length > 10000)) return
       this.consume([event]); this.changed()
@@ -294,12 +294,13 @@ export class SdtController {
     if (!Array.isArray(steps) || steps.length > 100) throw new Error('Legfeljebb 100 tesztlépés engedélyezett.')
     const ids = new Set<string>()
     for (const step of steps) {
-      if (!step || typeof step.id !== 'string' || !step.id || ids.has(step.id) || !['click', 'input', 'key', 'wait', 'url', 'assert-visible', 'assert-text', 'screenshot'].includes(step.kind)) throw new Error('Érvénytelen tesztlépés.')
+      if (!step || typeof step.id !== 'string' || !step.id || ids.has(step.id) || !['click','input','select','check','key','wait','url','assert-visible','assert-text','assert-value','screenshot'].includes(step.kind)) throw new Error('Érvénytelen tesztlépés.')
       ids.add(step.id)
-      if (['click','input','assert-visible','assert-text'].includes(step.kind) && (typeof step.selector !== 'string' || !step.selector.trim() || step.selector.length > 2048)) throw new Error('A lépés érvényes CSS-lokátort igényel.')
+      if (['click','input','select','check','assert-visible','assert-text','assert-value'].includes(step.kind) && (typeof step.selector !== 'string' || !step.selector.trim() || step.selector.length > 2048)) throw new Error('A lépés érvényes CSS-lokátort igényel.')
       if (step.value !== undefined && (typeof step.value !== 'string' || step.value.length > 10000)) throw new Error('A tesztlépés értéke legfeljebb 10 000 karakter lehet.')
       if (step.name !== undefined && (typeof step.name !== 'string' || step.name.length > 120)) throw new Error('A lépés neve legfeljebb 120 karakter lehet.')
       if (step.expectedValue !== undefined && (typeof step.expectedValue !== 'string' || step.expectedValue.length > 10000)) throw new Error('Az elvárt érték legfeljebb 10 000 karakter lehet.')
+      if(step.operator==='regex')try{new RegExp(step.expectedValue??'',step.regexFlags??'')}catch{throw new Error('Érvénytelen reguláris kifejezés.')}
       if (step.kind === 'wait' && (!Number.isFinite(step.ms) || step.ms! < 0 || step.ms! > 30000)) throw new Error('A várakozás 0–30 000 ms lehet.')
       if (step.kind === 'url') {
         try { const url = new URL(step.value || ''); if (!['http:', 'https:'].includes(url.protocol)) throw new Error() }
@@ -307,6 +308,8 @@ export class SdtController {
       }
     }
   }
+
+  private matches(actual:string,step:SdtStep){const expected=step.expectedValue??step.value??'',operator=step.operator??'equals';if(operator==='equals')return actual===expected;if(operator==='contains')return actual.includes(expected);if(operator==='not-contains')return !actual.includes(expected);if(operator==='empty')return actual.length===0;if(operator==='not-empty')return actual.length>0;return new RegExp(expected,step.regexFlags??'').test(actual)}
 
   private async pause(ms: number, epoch: number, target: Target) {
     const end = Date.now() + ms
@@ -360,6 +363,7 @@ export class SdtController {
       if(epoch!==this.epoch||this.disposed)break
       const result:SdtStepResult={id:step.id,...(step.name?{name:step.name}:{}),status:'running'},stepStarted=Date.now();this.results.push(result);this.changed()
       try{
+        if(step.disabled){result.status='skipped';result.message='A lépés ki van kapcsolva.';result.durationMs=0;this.changed();continue}
         this.assertCurrent(epoch,target);await this.waitForDocument(epoch,target)
         if(step.kind==='wait')await this.pause(step.ms!,epoch,target)
         else if(step.kind==='url'){
@@ -370,31 +374,33 @@ export class SdtController {
         else if(step.kind==='key'){
           const parts=(step.value||'').split('+').map(v=>v.trim()).filter(Boolean),key=parts.pop();if(!key)throw new Error('Hiányzó billentyű.')
           const mods={control:parts.some(v=>/^ctrl$/i.test(v)),shift:parts.some(v=>/^shift$/i.test(v)),alt:parts.some(v=>/^alt$/i.test(v)),meta:parts.some(v=>/^(meta|cmd)$/i.test(v))};target.contents.focus();target.contents.sendInputEvent({type:'keyDown',keyCode:key,...mods});target.contents.sendInputEvent({type:'keyUp',keyCode:key,...mods});await this.pause(80,epoch,target)
-        }else if(step.kind==='assert-visible'||step.kind==='assert-text'){
+        }else if(step.kind==='assert-visible'||step.kind==='assert-text'||step.kind==='assert-value'){
           const deadline=Date.now()+(step.timeoutMs||5000);let reply:SdtPageReply|undefined,last:unknown
-          do{try{reply=await this.page(target,{kind:'inspect',selector:step.selector!});if(reply.visible&&(step.kind==='assert-visible'||reply.value?.includes(step.value||'')))break}catch(error){last=error}await this.pause(120,epoch,target)}while(Date.now()<deadline)
+          do{try{reply=await this.page(target,{kind:'inspect',selector:step.selector!});if(reply.visible&&(step.kind==='assert-visible'||this.matches(reply.value??'',step)))break}catch(error){last=error}await this.pause(120,epoch,target)}while(Date.now()<deadline)
           if(!reply?.visible)throw(last instanceof Error?last:new Error('Az elem nem látható.'))
           const expected=step.expectedValue??step.value??''
-          if(step.kind==='assert-text'&&!reply.value?.includes(expected))throw new Error(`A várt érték nem található. Elvárt: ${expected.slice(0,150)} · Aktuális: ${(reply.value||'').slice(0,300)}`)
+          if(step.kind!=='assert-visible'&&!this.matches(reply.value??'',step))throw new Error(`Az ellenőrzés sikertelen. Elvárt: ${expected.slice(0,150)} · Aktuális: ${(reply.value||'').slice(0,300)}`)
         }else{
           const point=await this.waitForElement(target,step,epoch);this.assertCurrent(epoch,target);target.contents.focus()
           if(step.kind==='click'){
             if(typeof point.x!=='number'||typeof point.y!=='number')throw new Error('Az elem kattintási pontja nem érhető el.')
             target.contents.sendInputEvent({type:'mouseMove',x:point.x,y:point.y});target.contents.sendInputEvent({type:'mouseDown',x:point.x,y:point.y,button:'left',clickCount:1});target.contents.sendInputEvent({type:'mouseUp',x:point.x,y:point.y,button:'left',clickCount:1});await this.pause(160,epoch,target)
+          }else if(step.kind==='select'||step.kind==='check'){
+            const value=step.value??'';const actual=await this.page(target,{kind:'set-control',selector:step.selector!,value});if(actual.value!==value)throw new Error('A vezérlő nem vette fel a megadott értéket.')
           }else{
             const value=step.sensitive?secrets[step.id]:step.value;if(typeof value!=='string')throw new Error('A mezőhöz futáskor megadandó érték hiányzik.')
             await this.page(target,{kind:'prepare-input',selector:step.selector!});target.contents.selectAll();if(value)await target.contents.insertText(value);else{target.contents.sendInputEvent({type:'keyDown',keyCode:'Backspace'});target.contents.sendInputEvent({type:'keyUp',keyCode:'Backspace'})}await this.pause(80,epoch,target);const actual=await this.page(target,{kind:'read-input',selector:step.selector!});if(actual.value!==value)throw new Error('A mező nem fogadta el a megadott szöveget.')
           }
-          if(step.expectedValue!==undefined){const inspected=await this.page(target,{kind:'inspect',selector:step.selector!});if(inspected.value!==step.expectedValue)throw new Error(`Az érték eltér. Elvárt: ${step.expectedValue.slice(0,150)} · Aktuális: ${(inspected.value||'').slice(0,150)}`)}
+          if(step.expectedValue!==undefined){const inspected=await this.page(target,{kind:'inspect',selector:step.selector!});if(!this.matches(inspected.value??'',step))throw new Error(`Az érték eltér. Elvárt: ${step.expectedValue.slice(0,150)} · Aktuális: ${(inspected.value||'').slice(0,150)}`)}
         }
         result.status='passed'
       }catch(error){if(error instanceof Cancelled||epoch!==this.epoch)break;result.status='failed';result.message=error instanceof Error?error.message:'A tesztlépés sikertelen.';await this.diagnostics(target,runId,step,result)}
       result.durationMs=Date.now()-stepStarted;this.changed()
     }
     if(epoch!==this.epoch)return
-    const passed=this.results.filter(r=>r.status==='passed').length,failed=this.results.filter(r=>r.status==='failed').length,cancelled=this.results.filter(r=>r.status==='cancelled').length
+    const passed=this.results.filter(r=>r.status==='passed').length,failed=this.results.filter(r=>r.status==='failed').length,skipped=this.results.filter(r=>r.status==='skipped').length,cancelled=this.results.filter(r=>r.status==='cancelled').length
     this.mode='idle';this.activeRunId=null;this.message=failed?`A teszt lefutott: ${passed} sikeres, ${failed} hibás.`:`A teszt sikeres: ${passed} lépés.`
-    const run:SdtRun={id:runId,site:target.site,name:name.slice(0,100)||'UI teszt',startedAt,durationMs:Date.now()-startedAt,status:failed?'failed':cancelled?'cancelled':'passed',passed,failed,cancelled,results:this.results.map(r=>({...r}))};this.onRun?.(run);this.changed()
+    const run:SdtRun={id:runId,site:target.site,name:name.slice(0,100)||'UI teszt',startedAt,durationMs:Date.now()-startedAt,status:failed?'failed':cancelled?'cancelled':'passed',passed,failed,skipped,cancelled,results:this.results.map(r=>({...r}))};this.onRun?.(run);this.changed()
   }
   async dispose(): Promise<void> {
     await this.stop()

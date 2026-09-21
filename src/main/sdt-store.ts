@@ -39,8 +39,8 @@ export function validateSteps(input: unknown): SdtStep[] {
     const stepId = item.id === undefined ? randomUUID() : id(item.id)
     if (ids.has(stepId)) throw new Error('A lépések azonosítói nem ismétlődhetnek.')
     ids.add(stepId)
-    if (item.kind === 'click' || item.kind === 'input' || item.kind === 'assert-visible' || item.kind === 'assert-text') {
-      const step: SdtStep = { id: stepId, kind: item.kind, selector: text(item.selector, 2048, 'A lépéshez érvényes CSS-lokátor szükséges.') }
+    if (['click','input','select','check','assert-visible','assert-text','assert-value'].includes(String(item.kind))) {
+      const step: SdtStep = { id: stepId, kind: item.kind as SdtStep['kind'], selector: text(item.selector, 2048, 'A lépéshez érvényes CSS-lokátor szükséges.') }
       if (item.x !== undefined || item.y !== undefined) {
         if (typeof item.x !== 'number' || typeof item.y !== 'number' || !Number.isFinite(item.x) || !Number.isFinite(item.y) || item.x < 0 || item.y < 0 || item.x > 100000 || item.y > 100000) throw new Error('Érvénytelen kattintási koordináták.')
         step.x = item.x
@@ -48,14 +48,18 @@ export function validateSteps(input: unknown): SdtStep[] {
       }
       // Password fields are recorded as empty placeholders, never as captured secrets.
       if (item.kind === 'input' && item.value !== undefined) step.value = text(item.value, 10000, 'A beírt szöveg legfeljebb 10000 karakter lehet.', true)
+      if ((item.kind === 'select' || item.kind === 'check') && item.value !== undefined) step.value = text(item.value, 10000, 'Érvénytelen mezőérték.', true)
       if (item.kind === 'input' && item.sensitive === true) { step.sensitive = true; delete step.value }
-      if (item.kind === 'assert-text') step.value = text(item.value, 10000, 'Az ellenőrzött szöveg legfeljebb 10000 karakter lehet.', true)
+      if (item.kind === 'assert-text' && item.value !== undefined) step.value = text(item.value, 10000, 'Az ellenőrzött szöveg legfeljebb 10000 karakter lehet.', true)
       if (item.timeoutMs !== undefined) { if (typeof item.timeoutMs !== 'number' || !Number.isInteger(item.timeoutMs) || item.timeoutMs < 100 || item.timeoutMs > 30000) throw new Error('Az időkorlát 100–30000 ms lehet.'); step.timeoutMs = item.timeoutMs }
       if (item.name !== undefined) step.name = text(item.name, 120, 'A lépés neve legfeljebb 120 karakter lehet.', true).trim()
       if (item.expectedValue !== undefined) step.expectedValue = text(item.expectedValue, 10000, 'Az elvárt érték legfeljebb 10000 karakter lehet.', true)
+      if (['equals','contains','not-contains','regex','empty','not-empty'].includes(String(item.operator))) step.operator=item.operator as SdtStep['operator']
+      if(item.regexFlags!==undefined)step.regexFlags=text(item.regexFlags,10,'Érvénytelen regex kapcsoló.',true)
+      if(item.disabled===true)step.disabled=true
       return step
     }
-    const metadata = { ...(item.name === undefined ? {} : { name: text(item.name, 120, 'A lépés neve legfeljebb 120 karakter lehet.', true).trim() }), ...(item.expectedValue === undefined ? {} : { expectedValue: text(item.expectedValue, 10000, 'Az elvárt érték legfeljebb 10000 karakter lehet.', true) }) }
+    const metadata = { ...(item.name === undefined ? {} : { name: text(item.name, 120, 'A lépés neve legfeljebb 120 karakter lehet.', true).trim() }), ...(item.expectedValue === undefined ? {} : { expectedValue: text(item.expectedValue, 10000, 'Az elvárt érték legfeljebb 10000 karakter lehet.', true) }),...(item.disabled===true?{disabled:true}:{}) }
     if (item.kind === 'key') return { id: stepId, kind: 'key', value: text(item.value, 100, 'Adj meg egy billentyűt vagy kombinációt.'), ...metadata }
     if (item.kind === 'screenshot') return { id: stepId, kind: 'screenshot', ...(item.value === undefined ? {} : { value: text(item.value, 100, 'A képernyőkép neve túl hosszú.', true) }), ...metadata }
     if (item.kind === 'wait') {
@@ -65,6 +69,7 @@ export function validateSteps(input: unknown): SdtStep[] {
     if (item.kind === 'url') {
       const value = text(item.value, 8192, 'Érvénytelen ellenőrzendő webcím.')
       try {
+        if(value.includes('${'))return { id: stepId, kind: 'url', value, ...metadata }
         const url = new URL(value)
         if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error()
       } catch { throw new Error('Az URL-ellenőrzéshez HTTP(S) webcím szükséges.') }
@@ -87,7 +92,7 @@ export class SdtStore {
 
   private ensureSite(site:string){
     let project=this.projects.find(item=>item.site===site)
-    if(!project){project={id:randomUUID(),site,name:`${site} projekt`,baseUrl:`https://${site}/`,defaultTimeoutMs:5000,traceEnabled:true};this.projects.push(project)}
+    if(!project){project={id:randomUUID(),site,name:`${site} projekt`,baseUrl:`https://${site}/`,defaultTimeoutMs:5000,traceEnabled:true,variables:{},secretVariables:[],continueOnFailure:true};this.projects.push(project)}
     let suite=this.suites.find(item=>item.projectId===project.id)
     if(!suite){suite={id:randomUUID(),projectId:project.id,name:'Alapértelmezett tesztcsomag'};this.suites.push(suite)}
     return {project,suite}
@@ -99,7 +104,7 @@ export class SdtStore {
     try {
       if (fs.statSync(this.filePath).size > MAX_FILE_BYTES) throw new Error('Az SDT-adatfájl túl nagy.')
       const data = record(JSON.parse(fs.readFileSync(this.filePath, 'utf8')))
-      if (![1,2,3].includes(Number(data.version)) || !Array.isArray(data.tests) || data.tests.length > MAX_TESTS) throw new Error('Nem támogatott SDT-adatformátum.')
+      if (![1,2,3,4].includes(Number(data.version)) || !Array.isArray(data.tests) || data.tests.length > MAX_TESTS) throw new Error('Nem támogatott SDT-adatformátum.')
       const ids = new Set<string>()
       this.tests = data.tests.map(value => {
         const item = record(value)
@@ -112,8 +117,8 @@ export class SdtStore {
         return { id: testId, site: siteKey(item.site), ...(typeof item.suiteId==='string'?{suiteId:item.suiteId}:{}), name: text(item.name, 100, 'Érvénytelen tesztnév.').trim(), steps, updatedAt: item.updatedAt }
       })
       this.runs = data.version === 2 && Array.isArray(data.runs) ? (data.runs as SdtRun[]).filter(run => run && typeof run.id === 'string' && typeof run.site === 'string' && Array.isArray(run.results)).slice(0, 1000) : []
-      if(data.version===3&&Array.isArray(data.projects)&&Array.isArray(data.suites)){this.projects=data.projects as SdtProject[];this.suites=data.suites as SdtSuite[];this.runs=Array.isArray(data.runs)?data.runs as SdtRun[]:[]}
-      for(const site of new Set(this.tests.map(test=>test.site))){let project=this.projects.find(item=>item.site===site);if(!project){project={id:randomUUID(),site,name:`${site} projekt`,baseUrl:`https://${site}/`,defaultTimeoutMs:5000,traceEnabled:true};this.projects.push(project)}let suite=this.suites.find(item=>item.projectId===project!.id);if(!suite){suite={id:randomUUID(),projectId:project.id,name:'Alapértelmezett tesztcsomag'};this.suites.push(suite)}for(const test of this.tests.filter(item=>item.site===site&&!item.suiteId))test.suiteId=suite.id}
+      if((data.version===3||data.version===4)&&Array.isArray(data.projects)&&Array.isArray(data.suites)){this.projects=(data.projects as SdtProject[]).map(project=>({...project,variables:project.variables??{},secretVariables:project.secretVariables??[],continueOnFailure:project.continueOnFailure!==false}));this.suites=data.suites as SdtSuite[];this.runs=Array.isArray(data.runs)?data.runs as SdtRun[]:[]}
+      for(const site of new Set(this.tests.map(test=>test.site))){const {suite}=this.ensureSite(site);for(const test of this.tests.filter(item=>item.site===site&&!item.suiteId))test.suiteId=suite.id}
     } catch (error) {
       this.tests = []
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.loadError = 'A mentett SDT-adatok nem olvashatók. A meglévő adatfájl megőrzése érdekében a mentés letiltva.'
@@ -128,6 +133,7 @@ export class SdtStore {
   listProjects(site:string|null){if(site)this.ensureSite(site);return structuredClone(site?this.projects.filter(project=>project.site===site):[])}
   listSuites(site:string|null){if(site)this.ensureSite(site);const projects=new Set(this.projects.filter(project=>project.site===site).map(project=>project.id));return structuredClone(this.suites.filter(suite=>projects.has(suite.projectId)))}
   createSuite(site:string,name:string):Promise<SdtSuite>{return this.write(()=>{const project=this.projects.find(item=>item.site===site);if(!project)throw new Error('A projekt nem található.');const suite={id:randomUUID(),projectId:project.id,name:text(name,80,'A tesztcsomag neve 1–80 karakter lehet.').trim()};this.suites.push(suite);return structuredClone(suite)})}
+  updateProject(site:string,input:unknown):Promise<SdtProject>{return this.write(()=>{const item=record(input),{project}=this.ensureSite(site);const baseUrl=text(item.baseUrl,8192,'Adj meg érvényes base URL-t.');const parsed=new URL(baseUrl);if(!['http:','https:'].includes(parsed.protocol))throw new Error('A base URL HTTP(S) cím legyen.');const variables:Record<string,string>={};for(const [key,value] of Object.entries(record(item.variables??{}))){if(!/^[A-Za-z_][A-Za-z0-9_]{0,49}$/.test(key)||key==='baseUrl'||typeof value!=='string'||value.length>10000)throw new Error('Érvénytelen projektváltozó.');variables[key]=value}const secretVariables=Array.isArray(item.secretVariables)?item.secretVariables.filter((v):v is string=>typeof v==='string'&&/^[A-Za-z_][A-Za-z0-9_]{0,49}$/.test(v)).slice(0,50):[];Object.assign(project,{baseUrl:parsed.href,variables,secretVariables,continueOnFailure:item.continueOnFailure!==false});return structuredClone(project)})}
   listRuns(site: string | null): SdtRun[] { return site ? structuredClone(this.runs.filter(run => run.site === site).sort((a,b) => b.startedAt-a.startedAt).slice(0,MAX_RUNS_PER_SITE)) : [] }
   artifactPaths():Set<string>{return new Set(this.runs.flatMap(run=>run.results.flatMap(result=>[result.screenshot,result.domSnapshot]).filter((value):value is string=>!!value)))}
   addRun(run: SdtRun): Promise<void> { return this.write(() => { this.runs.unshift(structuredClone(run)); const keep=new Set<string>();this.runs=this.runs.filter(item=>{const count=[...keep].filter(key=>key.startsWith(item.site+'|')).length;if(count>=MAX_RUNS_PER_SITE)return false;keep.add(`${item.site}|${item.id}`);return true}) }) }
@@ -166,7 +172,7 @@ export class SdtStore {
       let temporary: string | undefined
       try {
         const result = change()
-        const snapshot = JSON.stringify({ version: 3, projects:this.projects, suites:this.suites, tests: this.tests, runs: this.runs }, null, 2)
+        const snapshot = JSON.stringify({ version: 4, projects:this.projects, suites:this.suites, tests: this.tests, runs: this.runs }, null, 2)
         await fs.promises.mkdir(path.dirname(this.filePath), { recursive: true })
         temporary = `${this.filePath}.${randomUUID()}.tmp`
         await fs.promises.writeFile(temporary, snapshot, { encoding: 'utf8', flag: 'wx' })

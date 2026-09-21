@@ -38,7 +38,7 @@ async function run() {
     }
     if (req.url === '/slow') { setTimeout(() => { if (!res.destroyed) res.end('slow') }, 1500); return }
     res.setHeader('Content-Type', 'text/html; charset=utf-8')
-    res.end(`<!doctype html><html><head><title>SDT próbaoldal</title><style>body{background:#111;color:#eee;font:16px Segoe UI;padding:36px}#color{background:rgb(20,40,60);color:rgb(240,220,200);border:3px solid rgba(255,102,0,.5);width:240px;padding:24px}input,button,a{display:block;margin:20px 0;padding:12px}#click{margin-top:28px}</style></head><body><h1>SDT próbaoldal</h1><div id="color">Színminta</div><input id="name" aria-label="Név"><input id="secret" type="password" aria-label="Jelszó"><button id="click">Kattintás</button><p id="count">0</p><a id="route" href="/second">Második útvonal</a>${req.url === '/second' ? '<button id="second-click">Második oldal művelete</button>' : ''}<script>document.querySelector('#click').onclick=()=>{document.querySelector('#count').textContent=String(Number(document.querySelector('#count').textContent)+1)};</script></body></html>`)
+    res.end(`<!doctype html><html><head><title>SDT próbaoldal</title><style>body{background:#111;color:#eee;font:16px Segoe UI;padding:36px}#color{background:rgb(20,40,60);color:rgb(240,220,200);border:3px solid rgba(255,102,0,.5);width:240px;padding:24px}input,button,a,select{display:block;margin:20px 0;padding:12px}#click{margin-top:28px}</style></head><body><h1>SDT próbaoldal</h1><div id="color">Színminta</div><input id="name" aria-label="Név"><input id="secret" type="password" aria-label="Jelszó"><select id="role" aria-label="Szerepkör"><option value="user">User</option><option value="admin">Admin</option></select><input id="enabled" type="checkbox" aria-label="Aktív"><button id="click">Kattintás</button><p id="count">0</p><a id="route" href="/second">Második útvonal</a>${req.url === '/second' ? '<button id="second-click">Második oldal művelete</button>' : ''}<script>document.querySelector('#click').onclick=()=>{document.querySelector('#count').textContent=String(Number(document.querySelector('#count').textContent)+1)};</script></body></html>`)
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   const base = `http://127.0.0.1:${server.address().port}`
@@ -142,9 +142,17 @@ async function run() {
   passed('Actual panel Run button starts and completes the saved UI test')
   passed('Saved UI test replays native input/click and rejects another site')
 
+  assert.equal((await sdt('project-save',{baseUrl:base+'/',variables:{userName:'Változóból'},secretVariables:['apiToken'],continueOnFailure:true})).ok,true)
+  const variableSteps=[{id:'variable-url',kind:'url',value:'${baseUrl}'},{id:'variable-input',kind:'input',selector:'#name',value:'${userName}',expectedValue:'Változóból'}]
+  assert.equal((await sdt('test-run',{name:'Változó próba',steps:variableSteps,variables:{apiToken:'csak-memória'}})).ok,true)
+  done=await until(async()=>{const s=await state();return s.mode==='idle'&&s.results.some(result=>result.id==='variable-input')?s:null},'project variables')
+  assert.ok(done.results.every(result=>result.status==='passed'),JSON.stringify(done.results))
+  assert.equal((await sdt('test-run',{steps:[{id:'missing-variable',kind:'input',selector:'#name',value:'${unknown}'}]})).ok,false)
+  passed('Project base URL, normal variables and missing-variable validation work')
+
   const secretPanelSteps = [{ id: 'secret-url', kind: 'url', value: base + '/' }, { id: 'secret-panel', kind: 'input', selector: '#secret', sensitive: true }]
   await sdt('draft-set', secretPanelSteps)
-  await until(() => sdtContents.executeJavaScript("document.querySelectorAll('#steps .step').length===2"), 'secret draft visible')
+  await until(async() => (await state()).draft.some(step=>step.id==='secret-panel'), 'secret draft visible')
   await sdtContents.executeJavaScript("document.getElementById('run').click(); true")
   await until(() => sdtContents.executeJavaScript("document.getElementById('secret-dialog').open"), 'inline secret dialog')
   await sdtContents.executeJavaScript("document.getElementById('secret-value').value='panel-secret';document.getElementById('secret-confirm').click();true")
@@ -164,13 +172,20 @@ async function run() {
     { id: 'secret-input', kind: 'input', selector: '#secret', sensitive: true },
     { id: 'key', kind: 'key', value: 'Tab' },
     { id: 'shot', kind: 'screenshot', value: 'állapot' },
+    { id: 'select-role', name:'Admin szerepkör',kind:'select',selector:'#role',value:'admin',expectedValue:'admin',operator:'equals' },
+    { id: 'check-enabled',name:'Aktiválás',kind:'check',selector:'#enabled',value:'true',expectedValue:'true',operator:'equals' },
+    { id: 'contains',kind:'assert-text',selector:'#color',expectedValue:'minta',operator:'contains' },
+    { id: 'disabled-step',kind:'click',selector:'#missing',disabled:true },
   ]
-  await sdt('test-run', { name: 'Haladó próba', steps: advanced, secrets: { 'secret-input': 'csak-memória' } })
-  done = await until(async () => { const s = await state(); return s.mode === 'idle' && s.results.length === advanced.length && s.runs?.length ? s : null }, 'advanced run')
+  assert.equal((await sdt('test-run', { name: 'Haladó próba', steps: advanced, secrets: { 'secret-input': 'csak-memória' } })).ok,true)
+  done = await until(async () => { const s = await state(); return s.mode === 'idle' && s.results.length === advanced.length && s.runs?.length ? s : null }, 'advanced run',30000)
   assert.equal(done.results.filter(r => r.status === 'failed').length, 1)
-  assert.equal(done.results.filter(r => r.status === 'passed').length, advanced.length - 1)
+  assert.equal(done.results.filter(r => r.status === 'passed').length, advanced.length - 2)
+  assert.equal(done.results.filter(r => r.status === 'skipped').length, 1)
   assert.equal(await page.executeJavaScript("document.getElementById('secret').value"), 'csak-memória')
   assert.ok(done.runs[0].results.some(r => r.screenshot), JSON.stringify(done.runs[0]))
+  assert.equal(await page.executeJavaScript("document.getElementById('role').value"),'admin')
+  assert.equal(await page.executeJavaScript("document.getElementById('enabled').checked"),true)
   passed('Assertions, runtime secret, screenshots and continue-after-failure work')
   await sdt('test-run', { steps: [{ id: 'longwait', kind: 'wait', ms: 30000 }] })
   await until(async () => (await state()).mode === 'running', 'wait running')
@@ -207,7 +222,7 @@ async function run() {
   await page.debugger.sendCommand('Input.dispatchMouseEvent', { type: 'mouseReleased', x: routeRect.x + 10, y: routeRect.y + 10, button: 'left', clickCount: 1 })
   await until(() => page.getURL() === base + '/second' && !page.isLoadingMainFrame(), 'second route loaded')
   done = await until(async () => { const value = await state(); return value.mode === 'recording' && value.draft.some(step => step.kind === 'url' && step.value === base + '/second') ? value : null }, 'route recording resumed')
-  const secondRect = JSON.parse(await page.executeJavaScript("JSON.stringify(document.getElementById('second-click').getBoundingClientRect().toJSON())"))
+  const secondRect = JSON.parse(await page.executeJavaScript("document.getElementById('second-click').scrollIntoView({block:'center'});JSON.stringify(document.getElementById('second-click').getBoundingClientRect().toJSON())"))
   await page.debugger.sendCommand('Input.dispatchMouseEvent', { type: 'mousePressed', x: secondRect.x + 10, y: secondRect.y + 10, button: 'left', clickCount: 1 })
   await page.debugger.sendCommand('Input.dispatchMouseEvent', { type: 'mouseReleased', x: secondRect.x + 10, y: secondRect.y + 10, button: 'left', clickCount: 1 })
   done = await until(async () => { const value = await state(); return value.draft.some(step => step.kind === 'click' && step.selector === '#second-click') ? value : null }, 'recording continued on second route')

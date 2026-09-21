@@ -7,6 +7,7 @@ export type SdtPageCommand =
   | { kind: 'install'; token: string; mode: 'picking' | 'recording'; binding?: string }
   | { kind: 'poll' | 'stop'; token: string }
   | { kind: 'locate' | 'prepare-input' | 'read-input' | 'inspect'; selector: string }
+  | {kind:'set-control';selector:string;value:string}
 
 export type SdtPageEvent =
   | { kind: 'selection'; selection: SdtSelection }
@@ -21,6 +22,7 @@ export type SdtPageReply = {
   y?: number
   value?: string
   visible?: boolean
+  checked?:boolean
   error?: string
 }
 
@@ -115,9 +117,15 @@ function pageCommand(command: SdtPageCommand): SdtPageReply {
   }
 
   try {
+    if(command.kind==='set-control'){
+      const element=locate(command.selector)
+      if(element instanceof HTMLSelectElement){element.value=command.value;element.dispatchEvent(new Event('input',{bubbles:true}));element.dispatchEvent(new Event('change',{bubbles:true}));return {value:element.value}}
+      if(element instanceof HTMLInputElement&&['checkbox','radio'].includes(element.type)){element.checked=command.value==='true';element.dispatchEvent(new Event('input',{bubbles:true}));element.dispatchEvent(new Event('change',{bubbles:true}));return {value:String(element.checked),checked:element.checked}}
+      throw new Error('A cél nem select, checkbox vagy rádiógomb.')
+    }
     if (command.kind === 'locate' || command.kind === 'prepare-input' || command.kind === 'read-input' || command.kind === 'inspect') {
       const element = locate(command.selector)
-      if (command.kind === 'inspect') { const style=getComputedStyle(element),rect=element.getBoundingClientRect();return { value:inputValue(element).trim(), visible:style.display!=='none'&&style.visibility==='visible'&&Number(style.opacity)>0&&rect.width>0&&rect.height>0 } }
+      if (command.kind === 'inspect') { const style=getComputedStyle(element),rect=element.getBoundingClientRect();const value=element instanceof HTMLSelectElement?element.value:element instanceof HTMLInputElement&&['checkbox','radio'].includes(element.type)?String(element.checked):inputValue(element).trim();return { value,checked:element instanceof HTMLInputElement?element.checked:undefined, visible:style.display!=='none'&&style.visibility==='visible'&&Number(style.opacity)>0&&rect.width>0&&rect.height>0 } }
       if (command.kind === 'locate') return targetPoint(element)
       if (!editable(element)) throw new Error('A kijelölt elem nem írható szövegmező.')
       if (command.kind === 'read-input') return { value: inputValue(element) }
@@ -264,6 +272,7 @@ function pageCommand(command: SdtPageCommand): SdtPageReply {
         } catch (error) { push({ kind: 'message', message: error instanceof Error ? error.message : 'Az elem nem választható ki.' }) }
       })
     } else {
+      const labelFor=(element:Element,action:string)=>{const label=element.getAttribute('aria-label')||element.getAttribute('name')||element.id||(element.textContent||'').trim().slice(0,60);return `${action}: ${label||element.localName}`}
       listen('click', event => {
         const mouse = event as MouseEvent
         if (!mouse.isTrusted || mouse.button !== 0 || mouse.ctrlKey || mouse.metaKey || mouse.altKey) return
@@ -272,7 +281,9 @@ function pageCommand(command: SdtPageCommand): SdtPageReply {
         session.flush()
         try {
           const element = original.closest('button, a, input, textarea, select, [role="button"], [role="link"], [contenteditable="true"]') || original
-          push(step({ kind: 'click', selector: uniqueSelector(element), x: Math.round(mouse.clientX), y: Math.round(mouse.clientY) }))
+          if(element instanceof HTMLInputElement&&['checkbox','radio'].includes(element.type))return
+          if(element instanceof HTMLSelectElement)return
+          push(step({ kind: 'click',name:labelFor(element,'Kattintás'), selector: uniqueSelector(element), x: Math.round(mouse.clientX), y: Math.round(mouse.clientY) }))
         } catch (error) { push({ kind: 'message', message: error instanceof Error ? error.message : 'A kattintás nem rögzíthető.' }) }
       })
       listen('input', event => {
@@ -293,11 +304,13 @@ function pageCommand(command: SdtPageCommand): SdtPageReply {
           const value = inputValue(element)
           if (value.length > 10000) { push({ kind: 'message', message: 'A 10 000 karakternél hosszabb mezőérték nem rögzíthető.' }); return }
           if (pendingInput && pendingInput.step.selector !== selector) session.flush()
-          pendingInput = step({ kind: 'input', selector, value })
+          pendingInput = step({ kind: 'input',name:labelFor(element,'Bevitel'), selector, value })
           if (inputTimer) clearTimeout(inputTimer)
           inputTimer = setTimeout(session.flush, 300)
         } catch (error) { push({ kind: 'message', message: error instanceof Error ? error.message : 'A bevitel nem rögzíthető.' }) }
       })
+      listen('change',event=>{if(!event.isTrusted)return;const element=pickedElement(event);if(!element)return;try{session.flush();const selector=uniqueSelector(element);if(element instanceof HTMLSelectElement)push(step({kind:'select',name:labelFor(element,'Választás'),selector,value:element.value,expectedValue:element.value}));else if(element instanceof HTMLInputElement&&['checkbox','radio'].includes(element.type))push(step({kind:'check',name:labelFor(element,'Állapot'),selector,value:String(element.checked),expectedValue:String(element.checked)}))}catch(error){push({kind:'message',message:error instanceof Error?error.message:'A mezőváltozás nem rögzíthető.'})}})
+      listen('keydown',event=>{const key=event as KeyboardEvent;if(!key.isTrusted||key.key==='Escape'||(!key.ctrlKey&&!key.altKey&&!key.metaKey&&!['Enter','Tab','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(key.key)))return;session.flush();const parts=[key.ctrlKey?'Ctrl':'',key.altKey?'Alt':'',key.shiftKey?'Shift':'',key.metaKey?'Meta':'',key.key].filter(Boolean);push(step({kind:'key',name:`Billentyű: ${parts.join('+')}`,value:parts.join('+')}))})
       listen('blur', () => session.flush())
       // Frame documents have separate event trees. Surface that boundary instead of claiming a complete recording.
       listen('blur', () => {

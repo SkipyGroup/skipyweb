@@ -19,8 +19,10 @@ let responseSignature = ''
 let runsSignature = ''
 let hierarchySignature = ''
 let localMessage = ''
+let pendingAssertion=false
 const validationErrors=new Map<string,string>()
 const stepElements = new Map<string, HTMLLIElement>()
+const selectedSteps=new Set<string>()
 
 function make<K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text?: string) {
   const node = document.createElement(tag)
@@ -79,6 +81,7 @@ function renderSelection() {
   $('selection').hidden = !selection; $('color-empty').hidden = !!selection
   $('color-list').replaceChildren()
   if (!selection) return
+  if(pendingAssertion){pendingAssertion=false;const step:SdtStep={id:crypto.randomUUID(),kind:'assert-value',name:`Ellenőrzés: ${selection.selector}`,selector:selection.selector,operator:'equals',expectedValue:''};alterSteps([...draft,step]);openSection('tests');queueMicrotask(()=>stepElements.get(step.id)?.scrollIntoView({behavior:'smooth',block:'center'}))}
   $('selector').textContent = selection.selector;$('selector').title='Kattints a lokátor másolásához';$('selector').onclick=()=>copy(selection.selector,$('selector') as unknown as HTMLButtonElement)
   if(selection.typography){const card=make('div','color-card');card.append(make('strong','','Tipográfia'),make('small','',`${selection.typography.fontFamily} · ${selection.typography.fontSize} · ${selection.typography.fontWeight} · ${selection.typography.lineHeight}`));$('color-list').append(card)}
   for (const color of selection.colors) {
@@ -160,7 +163,11 @@ function renderHierarchy(){
   if(projects[0])project.value=projects[0].id
   suite.replaceChildren(...suites.map(item=>{const option=make('option','',item.name);option.value=item.id;return option}))
   suite.value=selectedTest?.suiteId&&suites.some(item=>item.id===selectedTest.suiteId)?selectedTest.suiteId:(suites[0]?.id??'')
+  const active=projects[0];if(active){$<HTMLInputElement>('project-base-url').value=active.baseUrl;$<HTMLTextAreaElement>('project-variables').value=Object.entries(active.variables??{}).map(([key,value])=>`${key}=${value}`).join('\n');$<HTMLInputElement>('project-secrets').value=(active.secretVariables??[]).join(', ')}
 }
+
+async function runtimeValues(steps:SdtStep[]){const secrets:Record<string,string>={},variables:Record<string,string>={};for(const step of steps.filter(step=>step.kind==='input'&&step.sensitive&&!step.disabled)){const value=await requestSecret(step);if(value===null)return null;secrets[step.id]=value}const source=steps.map(step=>`${step.value??''}\n${step.expectedValue??''}`).join('\n');for(const name of state?.projects[0]?.secretVariables??[]){if(!source.includes(`\${${name}}`))continue;const value=await requestSecret({id:name,kind:'input',selector:`\${${name}}`,name});if(value===null)return null;variables[name]=value}return {secrets,variables}}
+async function executeRun(steps:SdtStep[],name?:string){validationErrors.clear();if(!steps.length){setMessage('Nincs futtatható lépés.',true);return}for(const step of steps){if(['click','input','select','check','assert-visible','assert-text','assert-value'].includes(step.kind)&&!step.selector?.trim())validationErrors.set(step.id,'Adj meg CSS-lokátort.');if(step.operator==='regex')try{new RegExp(step.expectedValue??step.value??'',step.regexFlags??'')}catch{validationErrors.set(step.id,'Hibás reguláris kifejezés.')}}if(validationErrors.size){renderSteps();setMessage(`${validationErrors.size} lépést javítani kell.`,true);stepElements.get(validationErrors.keys().next().value!)?.scrollIntoView({behavior:'smooth',block:'center'});return}if(!(await syncDraft()))return;const runtime=await runtimeValues(steps);if(!runtime)return;await command('start',{steps,...runtime,name:name||$<HTMLInputElement>('test-name').value.trim()||'UI teszt'})}
 function updateDraft(id: string, patch: Partial<SdtStep>) {
   draft = draft.map(step => step.id === id ? { ...step, ...patch } : step)
   editedDraft = true
@@ -173,7 +180,7 @@ function addStep(kind: SdtStep['kind']) {
   const step: SdtStep = { id: crypto.randomUUID(), kind }
   if (kind === 'wait') step.ms = 500
   if (kind === 'url') step.value = state.url
-  if (['click','input','assert-visible','assert-text'].includes(kind)) step.selector = ''
+  if (['click','input','select','check','assert-visible','assert-text','assert-value'].includes(kind)) step.selector = ''
   if (kind === 'input') step.value = ''
   if (kind === 'key') step.value = 'Enter'
   if (kind === 'assert-text') step.value = ''
@@ -185,7 +192,7 @@ function moveStep(id: string, offset: number) {
   if (target < 0 || target >= draft.length) return
   const next = [...draft]; [next[index], next[target]] = [next[target], next[index]]; alterSteps(next)
 }
-function inputField(label: string, key: 'name' | 'selector' | 'value' | 'expectedValue' | 'ms' | 'timeoutMs', step: SdtStep) {
+function inputField(label: string, key: 'name' | 'selector' | 'value' | 'expectedValue' | 'regexFlags' | 'ms' | 'timeoutMs', step: SdtStep) {
   const wrapper = make('label', '', label)
   const input = make('input'); input.dataset.field = key
   input.type = key === 'ms' || key === 'timeoutMs' ? 'number' : 'text'; input.spellcheck = false
@@ -200,7 +207,7 @@ function createStepElement(step: SdtStep) {
   row.dataset.kind = step.kind
   const number = make('span', 'step-index'), kind = make('select')
   kind.setAttribute('aria-label', 'Lépés típusa')
-  for (const [value, label] of [['click', 'Kattintás'], ['input', 'Szövegbevitel'], ['key','Billentyű'], ['wait', 'Várakozás'], ['url', 'URL-ellenőrzés'],['assert-visible','Láthatóság'],['assert-text','Szöveg ellenőrzése'],['screenshot','Képernyőkép']]) {
+  for (const [value, label] of [['click', 'Kattintás'], ['input', 'Szövegbevitel'],['select','Select'],['check','Checkbox/rádió'], ['key','Billentyű'], ['wait', 'Várakozás'], ['url', 'URL-ellenőrzés'],['assert-visible','Láthatóság'],['assert-text','Szöveg ellenőrzése'],['assert-value','Érték ellenőrzése'],['screenshot','Képernyőkép']]) {
     const option = make('option', '', label); option.value = value; kind.append(option)
   }
   kind.value = step.kind
@@ -208,32 +215,39 @@ function createStepElement(step: SdtStep) {
     const replacement: SdtStep = { id: step.id, ...(step.name?{name:step.name}:{}), kind: kind.value as SdtStep['kind'] }
     if (replacement.kind === 'wait') replacement.ms = 500
     if (replacement.kind === 'url') replacement.value = state?.url ?? ''
-    if (['click','input','assert-visible','assert-text'].includes(replacement.kind)) replacement.selector = ''
+    if (['click','input','select','check','assert-visible','assert-text','assert-value'].includes(replacement.kind)) replacement.selector = ''
     if (replacement.kind === 'input') replacement.value = ''
     if(replacement.kind==='key')replacement.value='Enter'
     if(replacement.kind==='assert-text')replacement.value=''
     alterSteps(draft.map(entry => entry.id === step.id ? replacement : entry))
   }
-  heading.append(number, kind)
+  const selected=make('input') as HTMLInputElement;selected.type='checkbox';selected.checked=selectedSteps.has(step.id);selected.title='Lépés kijelölése';selected.onchange=()=>selected.checked?selectedSteps.add(step.id):selectedSteps.delete(step.id)
+  const enabled=make('input') as HTMLInputElement;enabled.type='checkbox';enabled.checked=!step.disabled;enabled.title='Lépés bekapcsolva';enabled.onchange=()=>{updateDraft(step.id,{disabled:!enabled.checked});void syncDraft();row.classList.toggle('disabled',!enabled.checked)}
+  heading.append(selected,enabled,number, kind)
   for (const [name, label, callback] of [
     ['arrow-up', 'Lépés feljebb', () => moveStep(step.id, -1)],
     ['arrow-down', 'Lépés lejjebb', () => moveStep(step.id, 1)],
     ['copy', 'Lépés másolása', () => {const index=draft.findIndex(entry=>entry.id===step.id);const clone={...step,id:crypto.randomUUID()};const next=[...draft];next.splice(index+1,0,clone);alterSteps(next)}],
+    ['play', 'Csak ezt a lépést futtatja', () => void executeRun([step])],
     ['trash-2', 'Lépés törlése', () => alterSteps(draft.filter(entry => entry.id !== step.id))],
   ] as const) {
     const control = button('', callback, 'icon-button'); control.title = label; control.setAttribute('aria-label', label); control.dataset.action = name; control.append(icon(name)); heading.append(control)
   }
+  heading.append(button('Innen',()=>void executeRun(draft.slice(draft.findIndex(item=>item.id===step.id))), 'text-button'))
   row.append(heading)
+  row.draggable=true;row.ondragstart=event=>event.dataTransfer?.setData('text/plain',step.id);row.ondragover=event=>event.preventDefault();row.ondrop=event=>{event.preventDefault();const source=event.dataTransfer?.getData('text/plain');if(!source||source===step.id)return;const next=draft.filter(item=>item.id!==source),from=draft.find(item=>item.id===source);if(!from)return;next.splice(next.findIndex(item=>item.id===step.id),0,from);alterSteps(next)}
   row.append(inputField('Lépés neve', 'name', step))
-  if (['click','input','assert-visible','assert-text'].includes(step.kind)) row.append(inputField('CSS-lokátor', 'selector', step))
+  if (['click','input','select','check','assert-visible','assert-text','assert-value'].includes(step.kind)) row.append(inputField('CSS-lokátor', 'selector', step))
   if (step.kind === 'input') row.append(inputField('Szöveg', 'value', step))
+  if (step.kind === 'select') row.append(inputField('Kiválasztott érték', 'value', step))
+  if (step.kind === 'check') row.append(inputField('Állapot (true/false)', 'value', step))
   if (step.kind === 'key') row.append(inputField('Billentyű vagy kombináció', 'value', step))
   if (step.kind === 'assert-text') row.append(inputField('Elvárt szövegrészlet', 'value', step))
   if (step.kind === 'screenshot') row.append(inputField('Képernyőkép neve', 'value', step))
   if (step.kind === 'wait') row.append(inputField('Várakozás (ms)', 'ms', step))
   if (step.kind === 'url') row.append(inputField('Elvárt URL', 'value', step))
-  if (['click','input','assert-visible','assert-text'].includes(step.kind)) row.append(inputField('Időkorlát (ms)', 'timeoutMs', step))
-  if (['click','input','assert-visible','assert-text'].includes(step.kind)) row.append(inputField('Elvárt érték (opcionális)', 'expectedValue', step))
+  if (['click','input','select','check','assert-visible','assert-text','assert-value'].includes(step.kind)) row.append(inputField('Időkorlát (ms)', 'timeoutMs', step))
+  if (['click','input','select','check','assert-text','assert-value'].includes(step.kind)){row.append(inputField('Elvárt érték (opcionális)', 'expectedValue', step));const label=make('label','', 'Összehasonlítás'),operator=make('select') as HTMLSelectElement;for(const [value,text] of [['equals','Egyenlő'],['contains','Tartalmazza'],['not-contains','Nem tartalmazza'],['regex','Reguláris kifejezés'],['empty','Üres'],['not-empty','Nem üres']]){const option=make('option','',text) as HTMLOptionElement;option.value=value;operator.append(option)}operator.value=step.operator??'equals';operator.onchange=()=>{updateDraft(step.id,{operator:operator.value as SdtStep['operator']});void syncDraft()};label.append(operator);row.append(label);if(step.operator==='regex')row.append(inputField('Regex flagek (pl. i)', 'regexFlags', step))}
   const result = make('div', 'step-result'); result.setAttribute('role', 'status'); row.append(result)
   return row
 }
@@ -249,7 +263,7 @@ function renderSteps() {
     if ($('steps').children[index] !== row) $('steps').insertBefore(row, $('steps').children[index] ?? null)
     row.querySelector('.step-index')!.textContent = String(index + 1)
     for (const input of Array.from(row.querySelectorAll<HTMLInputElement>('[data-field]'))) {
-      const key = input.dataset.field as 'name' | 'selector' | 'value' | 'expectedValue' | 'ms' | 'timeoutMs', value = String(step[key] ?? (key==='timeoutMs'?5000:''))
+      const key = input.dataset.field as 'name' | 'selector' | 'value' | 'expectedValue' | 'regexFlags' | 'ms' | 'timeoutMs', value = String(step[key] ?? (key==='timeoutMs'?5000:''))
       if (document.activeElement !== input && input.value !== value) input.value = value
     }
     for (const input of Array.from(row.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement>('input, button, select'))) input.disabled = busy
@@ -257,7 +271,8 @@ function renderSteps() {
     row.querySelector<HTMLButtonElement>('[data-action="arrow-down"]')!.disabled = busy || index === draft.length - 1
     const result = results.get(step.id),validation=validationErrors.get(step.id)
     row.dataset.status = result?.status ?? ''
-    row.querySelector('.step-result')!.textContent = validation|| (result ? `${({ running: 'Folyamatban…', passed: 'Sikeres', failed: 'Hiba', cancelled: 'Megszakítva' })[result.status]}${result.message ? ` · ${result.message}` : ''}` : '')
+    row.querySelector('.step-result')!.textContent = validation|| (result ? `${({ running: 'Folyamatban…', passed: 'Sikeres', failed: 'Hiba', skipped:'Kihagyva', cancelled: 'Megszakítva' })[result.status]}${result.message ? ` · ${result.message}` : ''}` : '')
+    row.classList.toggle('disabled',!!step.disabled)
     row.classList.toggle('validation-error',!!validation)
   }
   $('step-count').textContent = `${draft.length} / 100`
@@ -327,7 +342,11 @@ $('api-form').addEventListener('input',saveApiDraft);$('api-form').addEventListe
 $<HTMLTextAreaElement>('api-body').addEventListener('blur',()=>{if($<HTMLSelectElement>('body-type').value!=='json')return;const body=$<HTMLTextAreaElement>('api-body');if(!body.value.trim())return;try{body.value=JSON.stringify(JSON.parse(body.value),null,2);saveApiDraft()}catch{/* Validation displays the useful error when sent. */}})
 $<HTMLSelectElement>('step-add').onchange = () => { const select = $<HTMLSelectElement>('step-add'); if (select.value) addStep(select.value as SdtStep['kind']); select.value = '' }
 $('record').onclick = async () => { if (await syncDraft()) void command('record-start') }
-$('run').onclick = async () => {validationErrors.clear();const run=$<HTMLButtonElement>('run'),label=run.querySelector('span')!;label.textContent='Ellenőrzés…';run.disabled=true;try{if(!draft.length){setMessage('A teszt nem tartalmaz lépéseket.',true);return}for(const step of draft){if(['click','input','assert-visible','assert-text'].includes(step.kind)&&!step.selector?.trim())validationErrors.set(step.id,'Adj meg CSS-lokátort.');if(step.kind==='url'){try{const url=new URL(step.value||'');if(!['http:','https:'].includes(url.protocol))throw 0}catch{validationErrors.set(step.id,'Adj meg teljes HTTP(S) kezdőcímet.')}}if(step.timeoutMs!==undefined&&(step.timeoutMs<100||step.timeoutMs>30000))validationErrors.set(step.id,'Az időkorlát 100–30000 ms lehet.')}if(validationErrors.size){setMessage(`${validationErrors.size} lépést javítani kell az indítás előtt.`,true);renderSteps();stepElements.get(validationErrors.keys().next().value!)?.scrollIntoView({behavior:'smooth',block:'center'});return}if (!(await syncDraft()))return;const secrets:Record<string,string>={};for(const step of draft.filter(step=>step.kind==='input'&&step.sensitive)){label.textContent='Érték szükséges';const value=await requestSecret(step);if(value===null){setMessage('A futtatás megszakítva.');return}secrets[step.id]=value}label.textContent='Indítás…';const ok=await command('start',{steps:draft,secrets,name:$<HTMLInputElement>('test-name').value.trim()||'UI teszt'});label.textContent=ok?'Futás elindítva':'Futtatás'}catch(error){setMessage(error instanceof Error?error.message:'A teszt nem indítható.',true)}finally{if(state?.mode!=='running')run.disabled=false;setTimeout(()=>{if(label.isConnected)label.textContent='Futtatás'},900)}}
+$('run').onclick=()=>void executeRun(draft)
+$('suite-run').onclick=async()=>{const runtime=await runtimeValues(state?.tests.filter(test=>test.suiteId===$<HTMLSelectElement>('suite-select').value).flatMap(test=>test.steps)??[]);if(runtime)void command('suite-run',{suiteId:$<HTMLSelectElement>('suite-select').value,...runtime})}
+$('steps-delete').onclick=()=>{alterSteps(draft.filter(step=>!selectedSteps.has(step.id)));selectedSteps.clear()}
+$('project-save').onclick=()=>{const variables:Record<string,string>={};for(const line of $<HTMLTextAreaElement>('project-variables').value.split(/\r?\n/)){if(!line.trim())continue;const at=line.indexOf('=');if(at<1){setMessage(`Hibás változó sor: ${line}`,true);return}variables[line.slice(0,at).trim()]=line.slice(at+1)}void command('project-save',{baseUrl:$<HTMLInputElement>('project-base-url').value,variables,secretVariables:$<HTMLInputElement>('project-secrets').value.split(',').map(v=>v.trim()).filter(Boolean),continueOnFailure:true})}
+$('assert-record').onclick=()=>{pendingAssertion=true;void command('pick-start')}
 $('runs-clear').onclick=()=>void command('runs-clear')
 $('suite-add').onclick=async()=>{const name=prompt('Az új tesztcsomag neve:')?.trim();if(!name)return;if(await command('suite-create',{name})){hierarchySignature='';setMessage('A tesztcsomag elkészült.')}}
 $('test-new').onclick = () => { testId = ''; $<HTMLSelectElement>('saved-tests').value = ''; $<HTMLInputElement>('test-name').value = ''; alterSteps([]) }

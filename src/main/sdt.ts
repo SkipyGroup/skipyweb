@@ -151,8 +151,16 @@ export class SdtService {
   private steps(input: unknown) {
     const target = this.activeTarget()
     const steps = validateSteps(input)
-    for (const step of steps) if (step.kind === 'url' && siteForUrl(step.value ?? '') !== target.site) throw new Error('A teszt URL-ellenőrzése csak az aktuális webhelyhez tartozhat.')
+    for (const step of steps) if (step.kind === 'url' && !step.value?.includes('${') && siteForUrl(step.value ?? '') !== target.site) throw new Error('A teszt URL-ellenőrzése csak az aktuális webhelyhez tartozhat.')
     return steps
+  }
+  private resolvedSteps(input:unknown,runtime:Record<string,string>={}){
+    const steps=this.steps(input),project=this.store.listProjects(this.target!.site)[0]
+    const values:Record<string,string>={baseUrl:project?.baseUrl??'',...(project?.variables??{}),...runtime}
+    const replace=(value:string|undefined,step:SdtStep)=>value?.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g,(_all,key:string)=>{if(values[key]===undefined)throw new Error(`Hiányzó változó: ${key} · ${step.name||step.id}`);return values[key]})
+    const resolved=steps.map(step=>({...step,value:replace(step.value,step),expectedValue:replace(step.expectedValue,step)}))
+    for(const step of resolved)if(step.kind==='url'&&siteForUrl(step.value??'')!==this.target!.site)throw new Error('A feloldott URL másik webhelyre mutat.')
+    return resolved
   }
   private async command(action: unknown, payload: unknown) {
     if (typeof action !== 'string') throw new Error('Érvénytelen SDT parancs.')
@@ -177,9 +185,12 @@ export class SdtService {
     if (action === 'pick-start') { await this.controller.startPicking(); this.target?.contents.focus(); return }
     if (action === 'record-start') { await this.controller.startRecording(); this.target?.contents.focus(); return }
     if (action === 'test-run' || action === 'start') {
-      const steps=this.steps(body.steps),secrets=body.secrets&&typeof body.secrets==='object'?body.secrets as Record<string,string>:{},name=typeof body.name==='string'?body.name:'UI teszt'
+      const secrets=body.secrets&&typeof body.secrets==='object'?body.secrets as Record<string,string>:{},variables=body.variables&&typeof body.variables==='object'?body.variables as Record<string,string>:{},steps=this.resolvedSteps(body.steps,variables),name=typeof body.name==='string'?body.name:'UI teszt'
       for(const step of steps)if(step.kind==='input'&&step.sensitive&&typeof secrets[step.id]!=='string')throw new Error(`Hiányzó futásidejű érték: ${step.selector||step.id}`)
       return await new Promise<string>((resolve,reject)=>{let acknowledged=false;void this.controller.run(steps,secrets,name,id=>{acknowledged=true;resolve(id)}).catch(error=>{if(!acknowledged)reject(error);else this.changed()})})
+    }
+    if(action==='suite-run'){
+      if(typeof body.suiteId!=='string')throw new Error('Válassz tesztcsomagot.');const tests=this.store.list(this.target!.site).filter(test=>test.suiteId===body.suiteId);if(!tests.length)throw new Error('A tesztcsomag üres.');const secrets=body.secrets&&typeof body.secrets==='object'?body.secrets as Record<string,string>:{},variables=body.variables&&typeof body.variables==='object'?body.variables as Record<string,string>:{};return await new Promise<string>((resolve,reject)=>{let ack=false;void(async()=>{for(const test of tests){const steps=this.resolvedSteps(test.steps,variables);await this.controller.run(steps,secrets,`${test.name} · csomag`,id=>{if(!ack){ack=true;resolve(id)}})}})().catch(error=>{if(!ack)reject(error);else this.changed()})})
     }
     if (this.isWorking) throw new Error('Előbb állítsd le a rögzítést vagy tesztet.')
     if (action === 'draft-set') this.controller.setDraft(this.steps(payload))
@@ -187,6 +198,7 @@ export class SdtService {
     else if (action === 'test-delete') { if (typeof body.id !== 'string') throw new Error('Hiányzó tesztazonosító.'); await this.store.remove(this.target!.site, body.id); this.changed() }
     else if(action==='runs-clear'){await this.store.clearRuns(this.target!.site);this.changed()}
     else if(action==='suite-create'){if(typeof body.name!=='string')throw new Error('Adj nevet a tesztcsomagnak.');return await this.store.createSuite(this.target!.site,body.name)}
+    else if(action==='project-save'){await this.store.updateProject(this.target!.site,body);this.changed()}
     else if(action==='run-export'){
       if(typeof body.id!=='string'||!['html','json'].includes(String(body.format)))throw new Error('Érvénytelen riport.')
       const run=this.store.listRuns(this.target!.site).find(item=>item.id===body.id);if(!run)throw new Error('A futás nem található.')
