@@ -384,7 +384,7 @@ export class SdtController {
           const point=await this.waitForElement(target,step,epoch);this.assertCurrent(epoch,target);target.contents.focus()
           if(step.kind==='click'){
             if(typeof point.x!=='number'||typeof point.y!=='number')throw new Error('Az elem kattintási pontja nem érhető el.')
-            target.contents.sendInputEvent({type:'mouseMove',x:point.x,y:point.y});target.contents.sendInputEvent({type:'mouseDown',x:point.x,y:point.y,button:'left',clickCount:1});target.contents.sendInputEvent({type:'mouseUp',x:point.x,y:point.y,button:'left',clickCount:1});await this.pause(160,epoch,target)
+            await this.page(target,{kind:'dom-click',selector:step.selector!});await this.pause(160,epoch,target)
           }else if(step.kind==='select'||step.kind==='check'){
             const value=step.value??'';const actual=await this.page(target,{kind:'set-control',selector:step.selector!,value});if(actual.value!==value)throw new Error('A vezérlő nem vette fel a megadott értéket.')
           }else{

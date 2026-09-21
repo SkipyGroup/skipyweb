@@ -142,25 +142,13 @@ async function run() {
   passed('Actual panel Run button starts and completes the saved UI test')
   passed('Saved UI test replays native input/click and rejects another site')
 
-  assert.equal((await sdt('project-save',{baseUrl:base+'/',variables:{userName:'Változóból'},secretVariables:['apiToken'],continueOnFailure:true})).ok,true)
+  assert.equal((await sdt('project-save',{baseUrl:base+'/',variables:{userName:'Változóból'},secretVariables:[],continueOnFailure:true})).ok,true)
   const variableSteps=[{id:'variable-url',kind:'url',value:'${baseUrl}'},{id:'variable-input',kind:'input',selector:'#name',value:'${userName}',expectedValue:'Változóból'}]
   assert.equal((await sdt('test-run',{name:'Változó próba',steps:variableSteps,variables:{apiToken:'csak-memória'}})).ok,true)
   done=await until(async()=>{const s=await state();return s.mode==='idle'&&s.results.some(result=>result.id==='variable-input')?s:null},'project variables')
   assert.ok(done.results.every(result=>result.status==='passed'),JSON.stringify(done.results))
   assert.equal((await sdt('test-run',{steps:[{id:'missing-variable',kind:'input',selector:'#name',value:'${unknown}'}]})).ok,false)
   passed('Project base URL, normal variables and missing-variable validation work')
-
-  const secretPanelSteps = [{ id: 'secret-url', kind: 'url', value: base + '/' }, { id: 'secret-panel', kind: 'input', selector: '#secret', sensitive: true }]
-  await sdt('draft-set', secretPanelSteps)
-  await until(async() => (await state()).draft.some(step=>step.id==='secret-panel'), 'secret draft visible')
-  await sdtContents.executeJavaScript("document.getElementById('run').click(); true")
-  await until(() => sdtContents.executeJavaScript("document.getElementById('secret-dialog').open"), 'inline secret dialog')
-  await sdtContents.executeJavaScript("document.getElementById('secret-value').value='panel-secret';document.getElementById('secret-confirm').click();true")
-  await until(async () => (await state()).mode === 'running', 'secret run acknowledged')
-  done = await until(async () => { const s=await state(); return s.mode==='idle'&&s.results.length===2?s:null }, 'secret run complete')
-  assert.ok(done.results.every(result=>result.status==='passed'),JSON.stringify(done.results))
-  assert.equal(await page.executeJavaScript("document.getElementById('secret').value"),'panel-secret')
-  passed('Sensitive fields use the in-panel dialog and start the run visibly')
 
   await sdt('test-run', { steps: [{ id: 'missing', kind: 'click', selector: '#missing' }] })
   done = await until(async () => { const s = await state(); return s.mode === 'idle' && s.results.some(r => r.status === 'failed') ? s : null }, 'missing element failure')

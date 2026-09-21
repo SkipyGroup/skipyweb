@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import { SdtController } from './sdt-controller'
 import { requestApi } from './sdt-api'
 import { SdtStore, validateSteps } from './sdt-store'
-import type { SdtApiResult, SdtReply, SdtState, SdtStep } from './sdt-types'
+import type { SdtApiResult, SdtReply, SdtRun, SdtState, SdtStep } from './sdt-types'
 import { siteForUrl } from './privacy'
 
 type Target = { id: string; site: string; url: string; contents: WebContents }
@@ -162,6 +162,20 @@ export class SdtService {
     for(const step of resolved)if(step.kind==='url'&&siteForUrl(step.value??'')!==this.target!.site)throw new Error('A feloldott URL másik webhelyre mutat.')
     return resolved
   }
+  private async reportHtml(run:SdtRun){
+    const esc=(value:unknown)=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]!))
+    const steps=new Map(this.store.list(run.site).flatMap(test=>test.steps).map(step=>[step.id,step]))
+    const labels:Record<string,string>={passed:'Sikeres',failed:'Hibás',skipped:'Kihagyva',cancelled:'Megszakítva',running:'Folyamatban'}
+    let rows='',diagnostics=''
+    for(const [index,result] of run.results.entries()){
+      const step=steps.get(result.id),expected=step?.expectedValue??(step?.kind?.startsWith('assert-')?step.value:'')??''
+      rows+=`<tr><td>${index+1}</td><td><strong>${esc(result.name||step?.name||result.id)}</strong><small>${esc(step?.kind||'lépés')}</small></td><td><span class="status ${esc(result.status)}">${esc(labels[result.status]||result.status)}</span></td><td>${esc(expected||'—')}</td><td>${result.durationMs??0} ms</td><td>${esc(result.message||'—')}</td></tr>`
+      let image='';if(result.screenshot)try{image=`<img alt="Hibakép" src="data:image/png;base64,${(await fs.promises.readFile(result.screenshot)).toString('base64')}">`}catch{}
+      if(result.message||image||result.console?.length||result.network?.length)diagnostics+=`<details><summary>${index+1}. ${esc(result.name||step?.name||result.id)} diagnosztika</summary><dl><dt>Aktuális URL</dt><dd>${esc(result.currentUrl||'—')}</dd><dt>Lokátor</dt><dd><code>${esc(step?.selector||'—')}</code></dd></dl>${image}<h3>Konzol</h3><pre>${esc(result.console?.join('\n')||'Nincs konzolüzenet.')}</pre><h3>Hálózat</h3><pre>${esc((result.network??[]).map(item=>`${item.method} ${item.host}${item.path} ${item.status??item.error??''}`).join('\n')||'Nincs hálózati hiba.')}</pre></details>`
+    }
+    const date=new Date(run.startedAt).toLocaleString('hu-HU'),duration=(run.durationMs/1000).toFixed(2),status=run.status==='passed'?'Sikeres':run.status==='failed'?'Hibás':'Megszakítva'
+    return `<!doctype html><html lang="hu"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${esc(run.name)} · SDT riport</title><style>:root{font-family:Inter,Segoe UI,sans-serif;color:#e9e9ed;background:#0b0b0d}*{box-sizing:border-box}body{max-width:1200px;margin:auto;padding:38px 24px;background:radial-gradient(circle at top right,#ff6a0018,transparent 35%)}header{display:flex;justify-content:space-between;gap:24px;align-items:start;border-bottom:1px solid #343238;padding-bottom:22px}h1{margin:4px 0;font-size:25px}.brand{color:#ff7a1a;font-weight:800;letter-spacing:.12em}.result{padding:8px 13px;border:1px solid #ff7a1a66;border-radius:99px;color:#ff9a54}.cards{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:22px 0}.card{padding:14px;border:1px solid #302f34;border-radius:10px;background:#17171a}.card small{display:block;color:#8e929f;margin-bottom:5px}.card strong{font-size:17px}table{width:100%;border-collapse:collapse;background:#151518;border:1px solid #333138}th,td{text-align:left;padding:11px 10px;border-bottom:1px solid #2d2c31;vertical-align:top}th{font-size:11px;color:#a4a6b0;background:#1e1d21}td{font-size:12px}td small{display:block;color:#777d89;margin-top:4px}.status{display:inline-block;padding:3px 8px;border-radius:99px;background:#333}.status.passed{color:#77d7a2;background:#163526}.status.failed{color:#ff9aaa;background:#401d25}.status.skipped{color:#d6b980;background:#3b321e}details{margin-top:12px;padding:13px;border:1px solid #343238;border-radius:9px;background:#151518}summary{cursor:pointer;font-weight:650;color:#ff9a54}dl{display:grid;grid-template-columns:120px 1fr;gap:7px;margin:14px 0}dt{color:#888e9b}dd{margin:0;word-break:break-all}pre{max-height:280px;overflow:auto;padding:12px;background:#0a0a0c;border-radius:7px;white-space:pre-wrap}img{display:block;max-width:100%;margin:15px 0;border:1px solid #444;border-radius:8px}@media print{body{background:#fff;color:#111;padding:10px}.card,table,details{background:#fff}.status{border:1px solid #777}details{break-inside:avoid}}@media(max-width:760px){.cards{grid-template-columns:1fr 1fr}table{display:block;overflow:auto}}</style></head><body><header><div><div class="brand">SKIPY DEVELOPER TOOLS</div><h1>${esc(run.name)}</h1><span>${esc(run.site)} · ${esc(date)}</span></div><div class="result">${status}</div></header><section class="cards"><div class="card"><small>Időtartam</small><strong>${duration} mp</strong></div><div class="card"><small>Összes lépés</small><strong>${run.results.length}</strong></div><div class="card"><small>Sikeres</small><strong>${run.passed}</strong></div><div class="card"><small>Hibás</small><strong>${run.failed}</strong></div><div class="card"><small>Kihagyva</small><strong>${run.skipped??0}</strong></div></section><h2>Lépések</h2><table><thead><tr><th>#</th><th>Lépés</th><th>Állapot</th><th>Elvárt érték</th><th>Idő</th><th>Eredmény</th></tr></thead><tbody>${rows}</tbody></table>${diagnostics?`<h2>Diagnosztika</h2>${diagnostics}`:''}</body></html>`
+  }
   private async command(action: unknown, payload: unknown) {
     if (typeof action !== 'string') throw new Error('Érvénytelen SDT parancs.')
     const body = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {}
@@ -204,7 +218,7 @@ export class SdtService {
       const run=this.store.listRuns(this.target!.site).find(item=>item.id===body.id);if(!run)throw new Error('A futás nem található.')
       const format=String(body.format),selected=await dialog.showSaveDialog(this.options.window,{title:'SDT riport exportálása',defaultPath:path.join(process.env.USERPROFILE||'',`sdt-${run.name.replace(/[^\w-]+/g,'_')}.${format}`),filters:[{name:format.toUpperCase(),extensions:[format]}]});if(selected.canceled||!selected.filePath)return
       if(format==='json')await fs.promises.writeFile(selected.filePath,JSON.stringify(run,null,2),'utf8')
-      else{const esc=(v:unknown)=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));let rows='';for(const result of run.results){let image='';if(result.screenshot){try{image=`<img src="data:image/png;base64,${(await fs.promises.readFile(result.screenshot)).toString('base64')}">`}catch{}}rows+=`<article><h3>${esc(result.id)} · ${esc(result.status)} · ${result.durationMs||0} ms</h3><p>${esc(result.message)}</p>${image}</article>`}await fs.promises.writeFile(selected.filePath,`<!doctype html><meta charset="utf-8"><title>${esc(run.name)}</title><style>body{font:14px system-ui;background:#111;color:#eee;max-width:1000px;margin:auto;padding:30px}article{padding:14px;border:1px solid #444;margin:10px 0}img{max-width:100%}</style><h1>${esc(run.name)}</h1><p>${run.passed} sikeres · ${run.failed} hibás · ${run.durationMs} ms</p>${rows}`,'utf8')}
+      else await fs.promises.writeFile(selected.filePath,await this.reportHtml(run),'utf8')
     }
     else if (action === 'test-load') {
       const test = this.store.list(this.target!.site).find(test => test.id === body.id)

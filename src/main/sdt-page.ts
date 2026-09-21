@@ -8,6 +8,7 @@ export type SdtPageCommand =
   | { kind: 'poll' | 'stop'; token: string }
   | { kind: 'locate' | 'prepare-input' | 'read-input' | 'inspect'; selector: string }
   | {kind:'set-control';selector:string;value:string}
+  | {kind:'dom-click';selector:string}
 
 export type SdtPageEvent =
   | { kind: 'selection'; selection: SdtSelection }
@@ -123,6 +124,7 @@ function pageCommand(command: SdtPageCommand): SdtPageReply {
       if(element instanceof HTMLInputElement&&['checkbox','radio'].includes(element.type)){element.checked=command.value==='true';element.dispatchEvent(new Event('input',{bubbles:true}));element.dispatchEvent(new Event('change',{bubbles:true}));return {value:String(element.checked),checked:element.checked}}
       throw new Error('A cél nem select, checkbox vagy rádiógomb.')
     }
+    if(command.kind==='dom-click'){const element=locate(command.selector);if(!(element instanceof HTMLElement))throw new Error('Az elem nem kattintható.');targetPoint(element);element.click();return {alive:true}}
     if (command.kind === 'locate' || command.kind === 'prepare-input' || command.kind === 'read-input' || command.kind === 'inspect') {
       const element = locate(command.selector)
       if (command.kind === 'inspect') { const style=getComputedStyle(element),rect=element.getBoundingClientRect();const value=element instanceof HTMLSelectElement?element.value:element instanceof HTMLInputElement&&['checkbox','radio'].includes(element.type)?String(element.checked):inputValue(element).trim();return { value,checked:element instanceof HTMLInputElement?element.checked:undefined, visible:style.display!=='none'&&style.visibility==='visible'&&Number(style.opacity)>0&&rect.width>0&&rect.height>0 } }
