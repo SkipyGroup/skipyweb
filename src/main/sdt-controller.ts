@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto'
+import fs from 'node:fs'
+import path from 'node:path'
 import type { WebContents } from 'electron'
 import { SDT_WORLD_ID, sdtPageScript, type SdtPageCommand, type SdtPageEvent, type SdtPageReply } from './sdt-page'
-import type { SdtSelection, SdtState, SdtStep, SdtStepResult } from './sdt-types'
+import type { SdtRun, SdtSelection, SdtState, SdtStep, SdtStepResult } from './sdt-types'
 
 type Target = { id: string; site: string; url: string; contents: WebContents }
-type Snapshot = Pick<SdtState, 'mode' | 'selection' | 'draft' | 'results' | 'message'>
+type Snapshot = Pick<SdtState, 'mode' | 'selection' | 'draft' | 'results' | 'message' | 'activeRunId'>
 
 class Cancelled extends Error {}
 
@@ -15,6 +17,9 @@ export class SdtController {
   private draft: SdtStep[] = []
   private results: SdtStepResult[] = []
   private message = ''
+  private activeRunId: string | null = null
+  private activeRunStartedAt = 0
+  private activeRunName = 'UI teszt'
   private epoch = 0
   private token: string | null = null
   private timer: NodeJS.Timeout | null = null
@@ -28,10 +33,18 @@ export class SdtController {
   private readonly seenEvents = new Set<string>()
   private boundContents: WebContents | null = null
   private disposed = false
+  private consoleTrace:string[]=[]
+  private networkTrace:{method:string;host:string;path:string;status?:number;error?:string}[]=[]
+  private networkRequests=new Map<string,{method:string;host:string;path:string}>()
 
-  constructor(private readonly onChange: () => void) {}
+  constructor(private readonly onChange: () => void, private readonly artifactsPath = '', private readonly onRun?: (run:SdtRun)=>void) {}
 
   private readonly onDebuggerMessage = (_event: Electron.Event, method: string, params: Record<string, unknown>) => {
+    if(this.mode==='running'&&method==='Runtime.consoleAPICalled'){const args=Array.isArray(params.args)?params.args as Array<{value?:unknown;description?:unknown}>:[];this.consoleTrace.push(args.map(arg=>String(arg.value??arg.description??'')).join(' ').slice(0,1000));if(this.consoleTrace.length>200)this.consoleTrace.shift()}
+    if(this.mode==='running'&&method==='Network.requestWillBeSent'){const request=params.request as {url?:string;method?:string}|undefined;try{const url=new URL(request?.url||'');this.networkRequests.set(String(params.requestId),{method:String(request?.method||'GET'),host:url.host,path:url.pathname})}catch{/* Ignore non-web URLs. */}}
+    if(this.mode==='running'&&method==='Network.responseReceived'){const row=this.networkRequests.get(String(params.requestId)),response=params.response as {status?:number}|undefined;if(row)this.networkTrace.push({...row,status:response?.status})}
+    if(this.mode==='running'&&method==='Network.loadingFailed'){const row=this.networkRequests.get(String(params.requestId));if(row)this.networkTrace.push({...row,error:String(params.errorText||'Hálózati hiba')})}
+    if(this.networkTrace.length>300)this.networkTrace.splice(0,this.networkTrace.length-300)
     if (method !== 'Runtime.bindingCalled' || params.name !== this.bindingName || typeof params.payload !== 'string' || params.payload.length > 15000) return
     try {
       const payload = JSON.parse(params.payload) as { token?: unknown; event?: unknown }
@@ -78,7 +91,7 @@ export class SdtController {
   snapshot(): Snapshot {
     return {
       mode: this.mode, selection: this.selection ? { ...this.selection, colors: this.selection.colors.map(color => ({ ...color })) } : null,
-      draft: this.draft.map(step => ({ ...step })), results: this.results.map(result => ({ ...result })), message: this.message,
+      draft: this.draft.map(step => ({ ...step })), results: this.results.map(result => ({ ...result })), message: this.message, activeRunId: this.activeRunId,
     }
   }
 
@@ -255,6 +268,7 @@ export class SdtController {
     if (this.timer) clearTimeout(this.timer)
     this.timer = null
     for (const result of this.results) if (result.status === 'running') { result.status = 'cancelled'; result.message = reason || 'A futtatás leállt.' }
+    if(mode==='running'&&this.activeRunId&&target){const passed=this.results.filter(r=>r.status==='passed').length,failed=this.results.filter(r=>r.status==='failed').length,cancelled=this.results.filter(r=>r.status==='cancelled').length;this.onRun?.({id:this.activeRunId,site:target.site,name:this.activeRunName,startedAt:this.activeRunStartedAt,durationMs:Date.now()-this.activeRunStartedAt,status:'cancelled',passed,failed,cancelled,results:this.results.map(result=>({...result}))});this.activeRunId=null}
     if (reason) this.message = reason
     this.changed()
     if (target && token && !target.contents.isDestroyed()) {
@@ -280,10 +294,12 @@ export class SdtController {
     if (!Array.isArray(steps) || steps.length > 100) throw new Error('Legfeljebb 100 tesztlépés engedélyezett.')
     const ids = new Set<string>()
     for (const step of steps) {
-      if (!step || typeof step.id !== 'string' || !step.id || ids.has(step.id) || !['click', 'input', 'wait', 'url'].includes(step.kind)) throw new Error('Érvénytelen tesztlépés.')
+      if (!step || typeof step.id !== 'string' || !step.id || ids.has(step.id) || !['click', 'input', 'key', 'wait', 'url', 'assert-visible', 'assert-text', 'screenshot'].includes(step.kind)) throw new Error('Érvénytelen tesztlépés.')
       ids.add(step.id)
-      if ((step.kind === 'click' || step.kind === 'input') && (typeof step.selector !== 'string' || !step.selector.trim() || step.selector.length > 2048)) throw new Error('A kattintás és bevitel érvényes CSS-lokátort igényel.')
+      if (['click','input','assert-visible','assert-text'].includes(step.kind) && (typeof step.selector !== 'string' || !step.selector.trim() || step.selector.length > 2048)) throw new Error('A lépés érvényes CSS-lokátort igényel.')
       if (step.value !== undefined && (typeof step.value !== 'string' || step.value.length > 10000)) throw new Error('A tesztlépés értéke legfeljebb 10 000 karakter lehet.')
+      if (step.name !== undefined && (typeof step.name !== 'string' || step.name.length > 120)) throw new Error('A lépés neve legfeljebb 120 karakter lehet.')
+      if (step.expectedValue !== undefined && (typeof step.expectedValue !== 'string' || step.expectedValue.length > 10000)) throw new Error('Az elvárt érték legfeljebb 10 000 karakter lehet.')
       if (step.kind === 'wait' && (!Number.isFinite(step.ms) || step.ms! < 0 || step.ms! > 30000)) throw new Error('A várakozás 0–30 000 ms lehet.')
       if (step.kind === 'url') {
         try { const url = new URL(step.value || ''); if (!['http:', 'https:'].includes(url.protocol)) throw new Error() }
@@ -312,7 +328,7 @@ export class SdtController {
   }
 
   private async waitForElement(target: Target, step: SdtStep, epoch: number): Promise<SdtPageReply> {
-    const end = Date.now() + 5000
+    const end = Date.now() + (step.timeoutMs || 5000)
     let error: Error = new Error('Az elem nem található.')
     do {
       this.assertCurrent(epoch, target)
@@ -330,81 +346,56 @@ export class SdtController {
     throw error
   }
 
-  async run(steps: SdtStep[]): Promise<void> {
-    const target = this.requireTarget()
-    this.validateSteps(steps)
-    if (!steps.length) throw new Error('A teszt nem tartalmaz lépéseket.')
-    await this.stop()
-    if (this.target !== target || this.disposed) throw new Error('Az aktív lap megváltozott.')
-    const epoch = ++this.epoch
-    this.mode = 'running'; this.results = []; this.message = 'A teszt fut. Bármikor leállítható.'
-    const copy = steps.map(step => ({ ...step }))
-    const startUrlIndex = copy.findIndex(step => step.kind === 'url')
-    this.draft = copy; this.changed()
-    try {
-      for (const [index, step] of copy.entries()) {
-        this.assertCurrent(epoch, target)
-        await this.waitForDocument(epoch, target)
-        const result: SdtStepResult = { id: step.id, status: 'running' }
-        this.results.push(result); this.changed()
-        if (step.kind === 'wait') await this.pause(step.ms!, epoch, target)
-        else if (step.kind === 'url') {
-          const expectedUrl = new URL(step.value!).href
-          if (index === startUrlIndex && new URL(target.contents.getURL()).href !== expectedUrl) {
-            this.message = `Kezdőpont megnyitása: ${new URL(expectedUrl).pathname || '/'}`
-            this.changed()
-            await target.contents.loadURL(expectedUrl)
-            await this.waitForDocument(epoch, target)
-          }
-          const currentUrl = target.contents.getURL()
-          if (new URL(currentUrl).href !== expectedUrl) throw new Error(`Az URL nem egyezik. Aktuális cím: ${currentUrl.slice(0, 500)}`)
-        } else {
-          const point = await this.waitForElement(target, step, epoch)
-          this.assertCurrent(epoch, target)
-          target.contents.focus()
-          if (step.kind === 'click') {
-            if (typeof point.x !== 'number' || typeof point.y !== 'number') throw new Error('Az elem kattintási pontja nem érhető el.')
-            if (target.contents.debugger.isAttached()) {
-              await target.contents.debugger.sendCommand('Input.dispatchMouseEvent', { type: 'mouseMoved', x: point.x, y: point.y })
-              await target.contents.debugger.sendCommand('Input.dispatchMouseEvent', { type: 'mousePressed', x: point.x, y: point.y, button: 'left', clickCount: 1 })
-              await target.contents.debugger.sendCommand('Input.dispatchMouseEvent', { type: 'mouseReleased', x: point.x, y: point.y, button: 'left', clickCount: 1 })
-            } else {
-              target.contents.sendInputEvent({ type: 'mouseMove', x: point.x, y: point.y })
-              target.contents.sendInputEvent({ type: 'mouseDown', x: point.x, y: point.y, button: 'left', clickCount: 1 })
-              target.contents.sendInputEvent({ type: 'mouseUp', x: point.x, y: point.y, button: 'left', clickCount: 1 })
-            }
-            // Leave one compositor frame plus event-loop time for page handlers
-            // and a possible navigation to start before advancing the test.
-            await this.pause(160, epoch, target)
-          } else {
-            if (typeof step.value !== 'string') throw new Error('A bemeneti lépés értéke hiányzik. Jelszót kézzel kell megadni a szerkesztőben.')
-            await this.page(target, { kind: 'prepare-input', selector: step.selector! })
-            this.assertCurrent(epoch, target)
-            target.contents.selectAll()
-            if (step.value) await target.contents.insertText(step.value)
-            else {
-              target.contents.sendInputEvent({ type: 'keyDown', keyCode: 'Backspace' })
-              target.contents.sendInputEvent({ type: 'keyUp', keyCode: 'Backspace' })
-            }
-            await this.pause(80, epoch, target)
-            const actual = await this.page(target, { kind: 'read-input', selector: step.selector! })
-            this.assertCurrent(epoch, target)
-            if (actual.value !== step.value) throw new Error('A mező nem fogadta el a megadott szöveget.')
-          }
-        }
-        this.assertCurrent(epoch, target)
-        result.status = 'passed'; this.changed()
-      }
-      this.mode = 'idle'; this.message = `A teszt sikeres: ${copy.length} lépés.`; this.changed()
-    } catch (error) {
-      if (error instanceof Cancelled || epoch !== this.epoch) return
-      const message = error instanceof Error ? error.message : 'A tesztlépés sikertelen.'
-      const result = this.results.find(entry => entry.status === 'running')
-      if (result) { result.status = 'failed'; result.message = message }
-      this.mode = 'idle'; this.message = message; this.changed()
-    }
+  private async screenshot(target:Target, runId:string, stepId:string):Promise<string|undefined>{
+    if(!this.artifactsPath)return undefined
+    try{await fs.promises.mkdir(this.artifactsPath,{recursive:true});const file=path.join(this.artifactsPath,`${runId}-${stepId}.png`);const image=await target.contents.capturePage();await fs.promises.writeFile(file,image.toPNG());return file}catch{return undefined}
   }
+  private async diagnostics(target:Target,runId:string,step:SdtStep,result:SdtStepResult){result.screenshot=await this.screenshot(target,runId,step.id);result.currentUrl=target.contents.getURL();result.console=this.consoleTrace.slice(-50);result.network=this.networkTrace.slice(-100);try{const html=await target.contents.executeJavaScriptInIsolatedWorld(SDT_WORLD_ID,[{code:`(()=>{const c=document.documentElement.cloneNode(true);for(const e of c.querySelectorAll('input,textarea')){e.removeAttribute('value');e.textContent=''}return c.outerHTML.slice(0,2097152)})()`}]);if(this.artifactsPath){const file=path.join(this.artifactsPath,`${runId}-${step.id}.html`);await fs.promises.writeFile(file,String(html),'utf8');result.domSnapshot=file}}catch{/* Best effort. */}result.locatorCandidates=[step.selector||'',step.selector?.replace(/:nth-of-type\(\d+\)/g,'')||''].filter((value,index,array)=>!!value&&array.indexOf(value)===index)}
 
+  async run(steps: SdtStep[], secrets:Record<string,string>={}, name='UI teszt', started?: (runId:string)=>void): Promise<void> {
+    const target = this.requireTarget();this.validateSteps(steps);if(!steps.length)throw new Error('A teszt nem tartalmaz lépéseket.')
+    await this.stop();if(this.target!==target||this.disposed)throw new Error('Az aktív lap megváltozott.')
+    const epoch=++this.epoch,copy=steps.map(step=>({...step})),startUrlIndex=copy.findIndex(step=>step.kind==='url'),startedAt=Date.now(),runId=randomUUID();this.consoleTrace=[];this.networkTrace=[];this.networkRequests.clear();if(target.contents.debugger.isAttached())void Promise.all(['Runtime.enable','Network.enable','Log.enable'].map(domain=>target.contents.debugger.sendCommand(domain).catch(()=>undefined)));this.activeRunId=runId;this.activeRunStartedAt=startedAt;this.activeRunName=name.slice(0,100)||'UI teszt';this.mode='running';this.results=[];this.message='A teszt fut. Bármikor leállítható.';this.draft=copy;this.changed();started?.(runId)
+    for(const [index,step] of copy.entries()){
+      if(epoch!==this.epoch||this.disposed)break
+      const result:SdtStepResult={id:step.id,...(step.name?{name:step.name}:{}),status:'running'},stepStarted=Date.now();this.results.push(result);this.changed()
+      try{
+        this.assertCurrent(epoch,target);await this.waitForDocument(epoch,target)
+        if(step.kind==='wait')await this.pause(step.ms!,epoch,target)
+        else if(step.kind==='url'){
+          const expected=new URL(step.value!).href
+          if(index===startUrlIndex&&new URL(target.contents.getURL()).href!==expected){this.message=`Kezdőpont megnyitása: ${new URL(expected).pathname||'/'}`;this.changed();await target.contents.loadURL(expected);await this.waitForDocument(epoch,target)}
+          const actual=target.contents.getURL();if(new URL(actual).href!==expected)throw new Error(`Az URL nem egyezik. Aktuális cím: ${actual.slice(0,500)}`)
+        }else if(step.kind==='screenshot'){result.screenshot=await this.screenshot(target,runId,step.id)}
+        else if(step.kind==='key'){
+          const parts=(step.value||'').split('+').map(v=>v.trim()).filter(Boolean),key=parts.pop();if(!key)throw new Error('Hiányzó billentyű.')
+          const mods={control:parts.some(v=>/^ctrl$/i.test(v)),shift:parts.some(v=>/^shift$/i.test(v)),alt:parts.some(v=>/^alt$/i.test(v)),meta:parts.some(v=>/^(meta|cmd)$/i.test(v))};target.contents.focus();target.contents.sendInputEvent({type:'keyDown',keyCode:key,...mods});target.contents.sendInputEvent({type:'keyUp',keyCode:key,...mods});await this.pause(80,epoch,target)
+        }else if(step.kind==='assert-visible'||step.kind==='assert-text'){
+          const deadline=Date.now()+(step.timeoutMs||5000);let reply:SdtPageReply|undefined,last:unknown
+          do{try{reply=await this.page(target,{kind:'inspect',selector:step.selector!});if(reply.visible&&(step.kind==='assert-visible'||reply.value?.includes(step.value||'')))break}catch(error){last=error}await this.pause(120,epoch,target)}while(Date.now()<deadline)
+          if(!reply?.visible)throw(last instanceof Error?last:new Error('Az elem nem látható.'))
+          const expected=step.expectedValue??step.value??''
+          if(step.kind==='assert-text'&&!reply.value?.includes(expected))throw new Error(`A várt érték nem található. Elvárt: ${expected.slice(0,150)} · Aktuális: ${(reply.value||'').slice(0,300)}`)
+        }else{
+          const point=await this.waitForElement(target,step,epoch);this.assertCurrent(epoch,target);target.contents.focus()
+          if(step.kind==='click'){
+            if(typeof point.x!=='number'||typeof point.y!=='number')throw new Error('Az elem kattintási pontja nem érhető el.')
+            target.contents.sendInputEvent({type:'mouseMove',x:point.x,y:point.y});target.contents.sendInputEvent({type:'mouseDown',x:point.x,y:point.y,button:'left',clickCount:1});target.contents.sendInputEvent({type:'mouseUp',x:point.x,y:point.y,button:'left',clickCount:1});await this.pause(160,epoch,target)
+          }else{
+            const value=step.sensitive?secrets[step.id]:step.value;if(typeof value!=='string')throw new Error('A mezőhöz futáskor megadandó érték hiányzik.')
+            await this.page(target,{kind:'prepare-input',selector:step.selector!});target.contents.selectAll();if(value)await target.contents.insertText(value);else{target.contents.sendInputEvent({type:'keyDown',keyCode:'Backspace'});target.contents.sendInputEvent({type:'keyUp',keyCode:'Backspace'})}await this.pause(80,epoch,target);const actual=await this.page(target,{kind:'read-input',selector:step.selector!});if(actual.value!==value)throw new Error('A mező nem fogadta el a megadott szöveget.')
+          }
+          if(step.expectedValue!==undefined){const inspected=await this.page(target,{kind:'inspect',selector:step.selector!});if(inspected.value!==step.expectedValue)throw new Error(`Az érték eltér. Elvárt: ${step.expectedValue.slice(0,150)} · Aktuális: ${(inspected.value||'').slice(0,150)}`)}
+        }
+        result.status='passed'
+      }catch(error){if(error instanceof Cancelled||epoch!==this.epoch)break;result.status='failed';result.message=error instanceof Error?error.message:'A tesztlépés sikertelen.';await this.diagnostics(target,runId,step,result)}
+      result.durationMs=Date.now()-stepStarted;this.changed()
+    }
+    if(epoch!==this.epoch)return
+    const passed=this.results.filter(r=>r.status==='passed').length,failed=this.results.filter(r=>r.status==='failed').length,cancelled=this.results.filter(r=>r.status==='cancelled').length
+    this.mode='idle';this.activeRunId=null;this.message=failed?`A teszt lefutott: ${passed} sikeres, ${failed} hibás.`:`A teszt sikeres: ${passed} lépés.`
+    const run:SdtRun={id:runId,site:target.site,name:name.slice(0,100)||'UI teszt',startedAt,durationMs:Date.now()-startedAt,status:failed?'failed':cancelled?'cancelled':'passed',passed,failed,cancelled,results:this.results.map(r=>({...r}))};this.onRun?.(run);this.changed()
+  }
   async dispose(): Promise<void> {
     await this.stop()
     this.target = null; this.disposed = true

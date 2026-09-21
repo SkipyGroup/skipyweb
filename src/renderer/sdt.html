@@ -17,7 +17,7 @@
       <nav class="tool-tabs" role="tablist" aria-label="Fejlesztői eszközök">
         <button id="tab-colors" role="tab" aria-selected="true" aria-controls="section-colors" data-section="colors"><i data-lucide="pipette"></i>Színek</button>
         <button id="tab-api" role="tab" aria-selected="false" aria-controls="section-api" data-section="api" tabindex="-1"><i data-lucide="braces"></i>API</button>
-        <button id="tab-tests" role="tab" aria-selected="false" aria-controls="section-tests" data-section="tests" tabindex="-1"><i data-lucide="list-checks"></i>UI-tesztek <small>FEJLESZTÉS ALATT</small></button>
+        <button id="tab-tests" role="tab" aria-selected="false" aria-controls="section-tests" data-section="tests" tabindex="-1"><i data-lucide="list-checks"></i>UI-tesztek</button>
       </nav>
       <div id="message" class="status-message" role="status" hidden></div>
       <div class="tool-content">
@@ -43,17 +43,20 @@
           <p class="hint">A kérés nem használja az oldal cookie-jait vagy bejelentkezését.</p>
         </section>
         <section id="section-tests" role="tabpanel" aria-labelledby="tab-tests" hidden>
-          <div class="section-intro"><h2>Automatizált UI-tesztek <span class="development-badge">FEJLESZTÉS ALATT</span></h2><p>Futtatáskor a teszt automatikusan megnyitja az első URL-lépést, majd onnan halad végig.</p></div>
+          <div class="section-intro"><h2>Automatizált UI-tesztek</h2><p>Futtatáskor a teszt automatikusan megnyitja az első URL-lépést, majd onnan halad végig.</p></div>
+          <div class="project-bar"><label>Projekt<select id="project-select" disabled></select></label><label>Tesztcsomag<select id="suite-select"></select></label><button id="suite-add" type="button">+ Tesztcsomag</button></div>
           <div class="saved-row"><select id="saved-tests" aria-label="Mentett tesztek"><option value="">Új teszt</option></select><button id="test-new" type="button" title="Új teszt">Új</button><button id="test-delete" class="icon-button danger" type="button" title="Mentett teszt törlése" aria-label="Mentett teszt törlése" disabled><i data-lucide="trash-2"></i></button></div>
           <label class="field-label" for="test-name">Teszt neve</label><input id="test-name" class="wide" maxlength="80" placeholder="Például: keresés az oldalon" />
-          <div class="test-actions"><button id="record" type="button"><i data-lucide="circle"></i>Rögzítés</button><button id="run" class="primary" type="button"><i data-lucide="play"></i>Futtatás</button><button id="run-stop" type="button" hidden>Leállítás</button><button id="test-save" type="button"><i data-lucide="save"></i>Mentés</button></div>
+          <div class="test-actions"><button id="record" type="button"><i data-lucide="circle"></i>Rögzítés</button><button id="run" class="primary" type="button"><i data-lucide="play"></i><span>Futtatás</span></button><button id="run-stop" type="button" hidden>Leállítás</button><button id="test-save" type="button"><i data-lucide="save"></i>Mentés</button></div><div id="run-progress" class="run-progress" hidden></div>
           <p id="tests-no-site" class="hint">A tesztekhez nyiss meg egy weboldalt.</p><p class="hint">Egy teszt azonos webhelyen több útvonalon is folytatódhat. A lapváltás és a másik webhelyre navigálás leállítja. Jelszót nem rögzítünk.</p>
-          <div class="section-label"><h3>Lépések <span id="step-count">0 / 100</span></h3><select id="step-add" aria-label="Lépés hozzáadása"><option value="">+ Lépés</option><option value="click">Kattintás</option><option value="input">Szövegbevitel</option><option value="wait">Várakozás</option><option value="url">URL-ellenőrzés</option></select></div>
+          <div class="section-label"><h3>Lépések <span id="step-count">0 / 100</span></h3><select id="step-add" aria-label="Lépés hozzáadása"><option value="">+ Lépés</option><option value="click">Kattintás</option><option value="input">Szövegbevitel</option><option value="key">Billentyű</option><option value="wait">Várakozás</option><option value="url">URL-ellenőrzés</option><option value="assert-visible">Láthatóság ellenőrzése</option><option value="assert-text">Szöveg ellenőrzése</option><option value="screenshot">Képernyőkép</option></select></div>
           <ol id="steps" class="steps"></ol><p id="steps-empty" class="empty-state small">Indíts rögzítést, vagy adj hozzá egy lépést.</p>
+          <div class="section-label"><h3>Futási előzmények</h3><button id="runs-clear" class="text-button" type="button">Törlés</button></div><div id="runs" class="runs"></div>
         </section>
       </div>
       <footer class="panel-footer"><span class="status-dot"></span>Fejlesztői mód aktív<span>Ctrl + Shift + D</span></footer>
     </main>
+    <dialog id="secret-dialog" class="secret-dialog"><form method="dialog"><h2>Futtatási érték szükséges</h2><p id="secret-description"></p><label>Érték<input id="secret-value" type="password" autocomplete="off" /></label><div><button id="secret-cancel" value="cancel" type="submit">Mégse</button><button id="secret-confirm" class="primary" value="confirm" type="submit">Folytatás</button></div></form></dialog>
     <script type="module" src="./sdt.ts"></script>
   </body>
 </html>

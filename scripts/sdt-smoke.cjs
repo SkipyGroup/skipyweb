@@ -123,23 +123,55 @@ async function run() {
 
   const steps = [
     { id: 'url', kind: 'url', value: base + '/' },
-    { id: 'type', kind: 'input', selector: '#name', value: 'Skipy teszt' },
+    { id: 'type', name: 'Név mező kitöltése', kind: 'input', selector: '#name', value: 'Skipy teszt', expectedValue: 'Skipy teszt' },
     { id: 'wait', kind: 'wait', ms: 50 },
     { id: 'click', kind: 'click', selector: '#click', x: 40, y: 40 },
   ]
   assert.equal((await sdt('test-save', { name: 'SDT próba', steps })).ok, true)
   await until(async () => (await state()).tests.length === 1, 'saved test')
-  assert.equal((await sdt('test-run', { steps })).ok, true)
+  await sdtContents.executeJavaScript(`(()=>{document.getElementById('tab-tests').click();const select=document.getElementById('saved-tests');select.value=window.__sdtState.tests[0].id;select.dispatchEvent(new Event('change',{bubbles:true}));return true})()`)
+  await until(() => sdtContents.executeJavaScript("document.querySelectorAll('#steps .step').length===4"), 'saved test visible in panel')
+  await sdtContents.executeJavaScript("document.getElementById('run').click(); true")
+  await until(async () => (await state()).mode === 'running', 'panel Run button acknowledged')
   done = await until(async () => { const s = await state(); return s.mode === 'idle' && s.results.length === steps.length && s.results.every(r => r.status !== 'running') ? s : null }, 'run success')
   assert.ok(done.results.every(r => r.status === 'passed'), JSON.stringify(done.results))
+  assert.equal(done.results.find(r=>r.id==='type').name,'Név mező kitöltése')
   assert.equal(await page.executeJavaScript("document.getElementById('name').value"), 'Skipy teszt')
   assert.equal(await page.executeJavaScript("document.getElementById('count').textContent"), '1')
   assert.equal((await sdt('test-run', { steps: [{ id: 'other', kind: 'url', value: 'https://example.com/' }] })).ok, false)
+  passed('Actual panel Run button starts and completes the saved UI test')
   passed('Saved UI test replays native input/click and rejects another site')
+
+  const secretPanelSteps = [{ id: 'secret-url', kind: 'url', value: base + '/' }, { id: 'secret-panel', kind: 'input', selector: '#secret', sensitive: true }]
+  await sdt('draft-set', secretPanelSteps)
+  await until(() => sdtContents.executeJavaScript("document.querySelectorAll('#steps .step').length===2"), 'secret draft visible')
+  await sdtContents.executeJavaScript("document.getElementById('run').click(); true")
+  await until(() => sdtContents.executeJavaScript("document.getElementById('secret-dialog').open"), 'inline secret dialog')
+  await sdtContents.executeJavaScript("document.getElementById('secret-value').value='panel-secret';document.getElementById('secret-confirm').click();true")
+  await until(async () => (await state()).mode === 'running', 'secret run acknowledged')
+  done = await until(async () => { const s=await state(); return s.mode==='idle'&&s.results.length===2?s:null }, 'secret run complete')
+  assert.ok(done.results.every(result=>result.status==='passed'),JSON.stringify(done.results))
+  assert.equal(await page.executeJavaScript("document.getElementById('secret').value"),'panel-secret')
+  passed('Sensitive fields use the in-panel dialog and start the run visibly')
 
   await sdt('test-run', { steps: [{ id: 'missing', kind: 'click', selector: '#missing' }] })
   done = await until(async () => { const s = await state(); return s.mode === 'idle' && s.results.some(r => r.status === 'failed') ? s : null }, 'missing element failure')
   passed('Missing element fails with a per-step result')
+  const advanced = [
+    { id: 'fail-fast', kind: 'click', selector: '#missing', timeoutMs: 200 },
+    { id: 'visible', kind: 'assert-visible', selector: '#color', timeoutMs: 500 },
+    { id: 'text', kind: 'assert-text', selector: '#color', value: 'Színminta', timeoutMs: 500 },
+    { id: 'secret-input', kind: 'input', selector: '#secret', sensitive: true },
+    { id: 'key', kind: 'key', value: 'Tab' },
+    { id: 'shot', kind: 'screenshot', value: 'állapot' },
+  ]
+  await sdt('test-run', { name: 'Haladó próba', steps: advanced, secrets: { 'secret-input': 'csak-memória' } })
+  done = await until(async () => { const s = await state(); return s.mode === 'idle' && s.results.length === advanced.length && s.runs?.length ? s : null }, 'advanced run')
+  assert.equal(done.results.filter(r => r.status === 'failed').length, 1)
+  assert.equal(done.results.filter(r => r.status === 'passed').length, advanced.length - 1)
+  assert.equal(await page.executeJavaScript("document.getElementById('secret').value"), 'csak-memória')
+  assert.ok(done.runs[0].results.some(r => r.screenshot), JSON.stringify(done.runs[0]))
+  passed('Assertions, runtime secret, screenshots and continue-after-failure work')
   await sdt('test-run', { steps: [{ id: 'longwait', kind: 'wait', ms: 30000 }] })
   await until(async () => (await state()).mode === 'running', 'wait running')
   await sdt('stop')

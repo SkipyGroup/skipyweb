@@ -6,7 +6,7 @@ export const SDT_WORLD_ID = 19731
 export type SdtPageCommand =
   | { kind: 'install'; token: string; mode: 'picking' | 'recording'; binding?: string }
   | { kind: 'poll' | 'stop'; token: string }
-  | { kind: 'locate' | 'prepare-input' | 'read-input'; selector: string }
+  | { kind: 'locate' | 'prepare-input' | 'read-input' | 'inspect'; selector: string }
 
 export type SdtPageEvent =
   | { kind: 'selection'; selection: SdtSelection }
@@ -20,6 +20,7 @@ export type SdtPageReply = {
   x?: number
   y?: number
   value?: string
+  visible?: boolean
   error?: string
 }
 
@@ -114,8 +115,9 @@ function pageCommand(command: SdtPageCommand): SdtPageReply {
   }
 
   try {
-    if (command.kind === 'locate' || command.kind === 'prepare-input' || command.kind === 'read-input') {
+    if (command.kind === 'locate' || command.kind === 'prepare-input' || command.kind === 'read-input' || command.kind === 'inspect') {
       const element = locate(command.selector)
+      if (command.kind === 'inspect') { const style=getComputedStyle(element),rect=element.getBoundingClientRect();return { value:inputValue(element).trim(), visible:style.display!=='none'&&style.visibility==='visible'&&Number(style.opacity)>0&&rect.width>0&&rect.height>0 } }
       if (command.kind === 'locate') return targetPoint(element)
       if (!editable(element)) throw new Error('A kijelölt elem nem írható szövegmező.')
       if (command.kind === 'read-input') return { value: inputValue(element) }
@@ -253,7 +255,7 @@ function pageCommand(command: SdtPageCommand): SdtPageReply {
             const rgb = alpha < 1 ? `rgba(${r}, ${g}, ${b}, ${Number(alpha.toFixed(4))})` : `rgb(${r}, ${g}, ${b})`
             return { label, css, hex, rgb }
           }
-          push({ kind: 'selection', selection: { selector, colors: [
+          push({ kind: 'selection', selection: { selector, typography: { fontFamily: style.fontFamily, fontSize: style.fontSize, fontWeight: style.fontWeight, lineHeight: style.lineHeight }, colors: [
             color('Háttér', style.backgroundColor), color('Szöveg', style.color),
             color('Felső keret', style.borderTopColor), color('Jobb keret', style.borderRightColor),
             color('Alsó keret', style.borderBottomColor), color('Bal keret', style.borderLeftColor),
@@ -282,7 +284,7 @@ function pageCommand(command: SdtPageCommand): SdtPageReply {
           if (element instanceof HTMLInputElement && element.type === 'password') {
             if (lastPasswordSelector !== selector) {
               session.flush(); lastPasswordSelector = selector
-              push(step({ kind: 'input', selector }))
+              push(step({ kind: 'input', selector, sensitive: true }))
               push({ kind: 'message', message: 'A jelszó tartalmát nem rögzítjük. A bemeneti lépés értékét kézzel add meg futtatás előtt.' })
             }
             return

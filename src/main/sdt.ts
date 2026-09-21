@@ -1,5 +1,6 @@
-import { clipboard, ipcMain, WebContentsView, type BrowserWindow, type WebContents } from 'electron'
+import { clipboard, dialog, ipcMain, WebContentsView, type BrowserWindow, type WebContents } from 'electron'
 import path from 'node:path'
+import fs from 'node:fs'
 import { SdtController } from './sdt-controller'
 import { requestApi } from './sdt-api'
 import { SdtStore, validateSteps } from './sdt-store'
@@ -30,18 +31,19 @@ export class SdtService {
   constructor(private options: Options) {
     this.store = new SdtStore(path.join(options.dataPath, 'sdt.json'))
     this.store.load()
-    this.controller = new SdtController(() => this.changed())
+    this.controller = new SdtController(() => this.changed(), path.join(options.dataPath,'sdt-artifacts'), run => { void this.store.addRun(run).then(()=>this.cleanupArtifacts()).then(()=>this.changed()) })
     ipcMain.handle('sdt:command', async (event, action: unknown, payload: unknown): Promise<SdtReply> => {
       if (!this.options.enabled() || !this.opened || !this.view || event.sender !== this.view.webContents || event.senderFrame !== this.view.webContents.mainFrame) return { ok: false, error: 'Az SDT csak bekapcsolt fejlesztői módban használható.' }
-      try { await this.command(action, payload); return { ok: true } }
+      try { const data=await this.command(action, payload); return { ok: true, ...(data===undefined?{}:{data}) } }
       catch (error) { return { ok: false, error: error instanceof Error ? error.message : 'Az SDT művelet nem sikerült.' } }
     })
   }
   get isOpen() { return this.opened }
   get isWorking() { return this.controller.snapshot().mode !== 'idle' }
+  private async cleanupArtifacts(){const dir=path.join(this.options.dataPath,'sdt-artifacts'),keep=this.store.artifactPaths();try{for(const name of await fs.promises.readdir(dir)){const file=path.join(dir,name);if(!keep.has(file))await fs.promises.rm(file,{force:true})}}catch{/* No artifacts yet. */}}
 
   private state(): SdtState {
-    return { enabled: this.options.enabled(), open: this.opened, tabId: this.target?.id ?? null, site: this.target?.site ?? null, url: this.target?.url ?? '', ...this.controller.snapshot(), tests: this.store.list(this.target?.site ?? null), apiRunning: !!this.apiAbort, apiResult: this.apiResult }
+    return { enabled: this.options.enabled(), open: this.opened, tabId: this.target?.id ?? null, site: this.target?.site ?? null, url: this.target?.url ?? '', ...this.controller.snapshot(), tests: this.store.list(this.target?.site ?? null), projects:this.store.listProjects(this.target?.site??null),suites:this.store.listSuites(this.target?.site??null), runs: this.store.listRuns(this.target?.site ?? null), apiRunning: !!this.apiAbort, apiResult: this.apiResult }
   }
   private changed() {
     if (this.disposed || this.timer) return
@@ -174,11 +176,24 @@ export class SdtService {
     this.activeTarget()
     if (action === 'pick-start') { await this.controller.startPicking(); this.target?.contents.focus(); return }
     if (action === 'record-start') { await this.controller.startRecording(); this.target?.contents.focus(); return }
-    if (action === 'test-run') { const steps = this.steps(body.steps); void this.controller.run(steps).catch(() => this.changed()); return }
+    if (action === 'test-run' || action === 'start') {
+      const steps=this.steps(body.steps),secrets=body.secrets&&typeof body.secrets==='object'?body.secrets as Record<string,string>:{},name=typeof body.name==='string'?body.name:'UI teszt'
+      for(const step of steps)if(step.kind==='input'&&step.sensitive&&typeof secrets[step.id]!=='string')throw new Error(`Hiányzó futásidejű érték: ${step.selector||step.id}`)
+      return await new Promise<string>((resolve,reject)=>{let acknowledged=false;void this.controller.run(steps,secrets,name,id=>{acknowledged=true;resolve(id)}).catch(error=>{if(!acknowledged)reject(error);else this.changed()})})
+    }
     if (this.isWorking) throw new Error('Előbb állítsd le a rögzítést vagy tesztet.')
     if (action === 'draft-set') this.controller.setDraft(this.steps(payload))
     else if (action === 'test-save') { await this.store.save(this.target!.site, { ...body, steps: this.steps(body.steps) }); this.changed() }
     else if (action === 'test-delete') { if (typeof body.id !== 'string') throw new Error('Hiányzó tesztazonosító.'); await this.store.remove(this.target!.site, body.id); this.changed() }
+    else if(action==='runs-clear'){await this.store.clearRuns(this.target!.site);this.changed()}
+    else if(action==='suite-create'){if(typeof body.name!=='string')throw new Error('Adj nevet a tesztcsomagnak.');return await this.store.createSuite(this.target!.site,body.name)}
+    else if(action==='run-export'){
+      if(typeof body.id!=='string'||!['html','json'].includes(String(body.format)))throw new Error('Érvénytelen riport.')
+      const run=this.store.listRuns(this.target!.site).find(item=>item.id===body.id);if(!run)throw new Error('A futás nem található.')
+      const format=String(body.format),selected=await dialog.showSaveDialog(this.options.window,{title:'SDT riport exportálása',defaultPath:path.join(process.env.USERPROFILE||'',`sdt-${run.name.replace(/[^\w-]+/g,'_')}.${format}`),filters:[{name:format.toUpperCase(),extensions:[format]}]});if(selected.canceled||!selected.filePath)return
+      if(format==='json')await fs.promises.writeFile(selected.filePath,JSON.stringify(run,null,2),'utf8')
+      else{const esc=(v:unknown)=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));let rows='';for(const result of run.results){let image='';if(result.screenshot){try{image=`<img src="data:image/png;base64,${(await fs.promises.readFile(result.screenshot)).toString('base64')}">`}catch{}}rows+=`<article><h3>${esc(result.id)} · ${esc(result.status)} · ${result.durationMs||0} ms</h3><p>${esc(result.message)}</p>${image}</article>`}await fs.promises.writeFile(selected.filePath,`<!doctype html><meta charset="utf-8"><title>${esc(run.name)}</title><style>body{font:14px system-ui;background:#111;color:#eee;max-width:1000px;margin:auto;padding:30px}article{padding:14px;border:1px solid #444;margin:10px 0}img{max-width:100%}</style><h1>${esc(run.name)}</h1><p>${run.passed} sikeres · ${run.failed} hibás · ${run.durationMs} ms</p>${rows}`,'utf8')}
+    }
     else if (action === 'test-load') {
       const test = this.store.list(this.target!.site).find(test => test.id === body.id)
       if (!test) throw new Error('Ez a teszt nem az aktuális webhelyhez tartozik.')

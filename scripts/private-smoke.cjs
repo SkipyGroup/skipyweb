@@ -40,7 +40,7 @@ async function run() {
   assert.equal(state.privateMode, true)
   assert.equal(await win.webContents.executeJavaScript("!document.getElementById('private-indicator').hidden"), true)
   assert.equal(await win.webContents.executeJavaScript("!!document.getElementById('new-window')&&!!document.getElementById('new-private-window')"), true)
-  assert.equal(await win.webContents.executeJavaScript("!!document.getElementById('create-menu')&&!!document.getElementById('menu-new-tab')"), true)
+  assert.equal(await win.webContents.executeJavaScript("!!document.getElementById('create-menu')&&!!document.getElementById('new-tab')"), true)
   await until(async () => (await command('state')).library.extensions[0]?.enabled, 'unpacked extension loaded')
   state = await command('state')
   assert.equal(state.library.downloads[0].name, 'pelda.zip')
