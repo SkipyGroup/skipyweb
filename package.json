@@ -2,14 +2,14 @@
   "name": "skipy-browser",
   "version": "0.1.0",
   "private": true,
-  "description": "A small Windows desktop browser",
+  "description": "A small macOS desktop browser",
   "productName": "Skipy Browser",
   "main": "dist-main/main.js",
   "scripts": {
     "build": "tsc -p tsconfig.main.json && tsc -p tsconfig.preload.json && vite build src/renderer --config vite.config.ts --outDir ../../dist --emptyOutDir --base ./",
     "start": "npm run build && electron .",
     "dist:win": "tsc -p tsconfig.main.json && tsc -p tsconfig.preload.json && vite build src/renderer --config vite.config.ts --outDir ../../dist --emptyOutDir --base ./ && electron-builder --win nsis --x64",
-    "dist:mac": "tsc -p tsconfig.main.json && tsc -p tsconfig.preload.json && vite build src/renderer --config vite.config.ts --outDir ../../dist --emptyOutDir --base ./ && electron-builder --mac dmg --x64 --arm64",
+    "dist:mac": "tsc -p tsconfig.main.json && tsc -p tsconfig.preload.json && vite build src/renderer --config vite.config.ts --outDir ../../dist --emptyOutDir --base ./ && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dmg --x64 --arm64",
     "check": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.preload.json --noEmit && tsc -p tsconfig.renderer.json --noEmit"
   },
   "build": {

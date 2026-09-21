@@ -18,7 +18,9 @@ const windowArgument = process.argv.find(argument => argument.startsWith('--skip
 const windowToken = windowArgument?.slice('--skipy-window='.length).replace(/[^a-zA-Z0-9_-]/g, '') || ''
 const privateRoot = privateMode ? path.join(app.getPath('temp'), `skipy-private-${windowToken || process.pid}`) : ''
 const userDataPath = privateMode ? path.join(privateRoot, 'profile') : path.join(app.getPath('appData'), 'skipy-browser')
-const localDataRoot = process.env.LOCALAPPDATA || path.resolve(app.getPath('appData'), '..', 'Local')
+const localDataRoot = process.platform === 'win32'
+  ? process.env.LOCALAPPDATA || path.resolve(app.getPath('appData'), '..', 'Local')
+  : app.getPath('appData')
 let sessionDataPath = privateMode
   ? path.join(privateRoot, 'session')
   : windowToken
@@ -1412,7 +1414,9 @@ if (hasSingleInstanceLock) void app.whenReady().then(() => {
   })
   window = new BrowserWindow({
     width: 1280, height: 820, minWidth: 680, minHeight: 400,
-    title: privateMode ? 'Skipy Browser – Inkognitó' : 'Skipy Browser', backgroundColor: '#111113', frame: false,
+    title: privateMode ? 'Skipy Browser – Inkognitó' : 'Skipy Browser', backgroundColor: '#111113',
+    frame: process.platform !== 'darwin',
+    ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: { x: 14, y: 13 } } : {}),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false, contextIsolation: true, sandbox: true,
@@ -1454,6 +1458,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(() => {
   window.on('unmaximize', publish)
   window.webContents.on('before-input-event', (event, input) => handleShortcut(input, event))
   window.webContents.on('did-finish-load', () => {
+    if (process.platform === 'darwin') void window.webContents.insertCSS('.topbar{padding-left:76px!important}.window-controls{display:none!important}')
     publish()
     setTimeout(() => window.webContents.send('browser:focus-address'), 0)
     setTimeout(() => { if (!panelView) panelView = overlayView('panel') }, 250)
