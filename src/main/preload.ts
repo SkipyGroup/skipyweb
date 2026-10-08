@@ -12,6 +12,11 @@ contextBridge.exposeInMainWorld('browser', {
     ipcRenderer.on('browser:focus-address', listener)
     return () => ipcRenderer.removeListener('browser:focus-address', listener)
   },
+  onFocusFind: (callback: () => void) => {
+    const listener = () => callback()
+    ipcRenderer.on('browser:focus-find', listener)
+    return () => ipcRenderer.removeListener('browser:focus-find', listener)
+  },
   onOverlayClose: (callback: () => void) => {
     const listener = () => callback()
     ipcRenderer.on('browser:overlay-close', listener)

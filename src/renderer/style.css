@@ -146,3 +146,56 @@ body:not(.private-mode) .home-corner-actions{display:none}body.private-mode .top
 #bookmark-toggle.bookmarked{color:#ff8b2c}#bookmark-toggle.bookmarked .lucide{fill:currentColor}.tab.hibernated{opacity:.7}.tab.hibernated .favicon-wrap:after{content:"zZ";position:absolute;right:-5px;bottom:-5px;padding:1px 2px;border-radius:4px;background:#30231b;color:#ff963f;font-size:6px;font-weight:800}.bookmark-search,.bookmark-folder-input{width:100%;padding:8px 10px;border:1px solid #3d3d42;border-radius:8px;background:#111114;color:#e9e9ed}.bookmark-search{margin:5px 0 10px}.bookmark-folder-input{margin-top:8px;font-size:10px}.bookmark-group{margin:15px 8px 3px;color:#ff964c;font-size:9px;font-weight:800;letter-spacing:1px;text-transform:uppercase}
 @media(prefers-reduced-motion:reduce){.onboarding-card,.onboarding-card img{animation:none}}
 .safety-card{padding:11px 12px;border:1px solid #3b594b;border-radius:10px;background:#14231c;color:#cde9dc;font-size:11px}.safety-card.warning{border-color:#805020;background:#2a1e13;color:#ffd2a8}.safety-card.danger{border-color:#863845;background:#2d171c;color:#ffc1ca}.safety-card ul{margin:8px 0 0;padding-left:17px;color:#aeb7b2;line-height:1.5}.safety-card.warning ul,.safety-card.danger ul{color:inherit}
+
+/* Stepper styles */
+#show-stepper.stepper-running{color:#ff861f;animation:stepper-glow 1.5s ease-in-out infinite alternate}
+@keyframes stepper-glow{from{filter:drop-shadow(0 0 1px #ff861f)}to{filter:drop-shadow(0 0 6px #ff861f)}}
+.stepper-status-card{padding:12px;border-radius:10px;background:#141416;border:1px solid #363439;display:flex;flex-direction:column;gap:8px}
+.stepper-status-card.running{border-color:#8b4819;background:radial-gradient(circle at top right,#381f10 0%,#151417 65%)}
+.stepper-status-card.paused{border-color:#806019;background:radial-gradient(circle at top right,#332710 0%,#151417 65%)}
+.stepper-status-head{display:flex;align-items:center;gap:8px}
+.stepper-status-badge{font-size:9px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;padding:3px 7px;border-radius:6px;background:#252429;color:#a0a6b2}
+.stepper-status-card.running .stepper-status-badge{background:#ff7b1a;color:#1a0c04}
+.stepper-status-card.paused .stepper-status-badge{background:#d4a017;color:#1a1404}
+.stepper-status-text{font-size:11px;color:#cdd2db;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.stepper-stats-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:2px}
+.stepper-stat{padding:6px 9px;border-radius:7px;background:#1e1d21;border:1px solid #2b2a2e;display:flex;flex-direction:column;gap:2px}
+.stepper-stat span{font-size:9px;color:#888f9c;text-transform:uppercase;letter-spacing:.3px}
+.stepper-stat strong{font-size:13px;color:#ff913d;font-weight:700}
+.stepper-last-file{font-size:10px;color:#858d99;font-family:Consolas,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-top:4px;border-top:1px solid #27262a}
+.stepper-config-section{display:flex;flex-direction:column;gap:9px;padding:6px 0}
+.stepper-field{display:flex;flex-direction:column;gap:4px}
+.stepper-field span{font-size:10px;color:#a2a8b5;font-weight:600}
+.stepper-field select,.stepper-field input{padding:6px 9px;border-radius:7px;border:1px solid #3c383e;background:#141316;color:#e5e7ec;font-size:11px;outline:none}
+.stepper-field select:focus,.stepper-field input:focus{border-color:#ff861f}
+.stepper-grid-2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.stepper-action-buttons{display:flex;align-items:center;gap:6px;margin-top:4px;padding-top:8px;border-top:1px solid #353033}
+.stepper-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:8px 12px;border-radius:8px;font-size:11px;font-weight:700;border:1px solid transparent;flex:1;transition:all .15s ease}
+.stepper-btn .lucide{width:13px;height:13px}
+.stepper-btn-primary{background:#ff7b18;color:#170b04;border-color:#ff8f38}
+.stepper-btn-primary:hover{background:#ff9138}
+.stepper-btn-secondary{background:#352a1d;color:#ff9d47;border-color:#6a441e}
+.stepper-btn-secondary:hover{background:#473724}
+.stepper-btn-danger{background:#3d1c22;color:#f796a3;border-color:#77313d}
+.stepper-btn-danger:hover{background:#50212a}
+.stepper-btn-ghost{flex:none;background:#252428;color:#b7bcc7;border-color:#3b3a3f;padding:8px 10px}
+.stepper-btn-ghost:hover{background:#333237;color:#fff}
+
+/* ── Updater UI ────────────────────────────────────────────── */
+.updater-card{background:#1c1b1f;border:1px solid #2e2d32;border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:10px;margin-bottom:4px}
+.updater-version-row{display:flex;align-items:center;justify-content:space-between}
+.updater-current-ver{font-size:12px;color:#8b8896}
+.updater-status{font-size:12px;font-weight:500;padding:4px 0}
+.updater-status-available{color:#7dd3a8}
+.updater-status-not-available{color:#8b8896}
+.updater-status-checking{color:#aaa;font-style:italic}
+.updater-status-downloading{color:#7ab4f5}
+.updater-status-ready{color:#7dd3a8;font-weight:600}
+.updater-status-error{color:#f28b82}
+.updater-progress-bar{height:4px;border-radius:2px;background:#2e2d32;overflow:hidden;position:relative}
+.updater-progress-bar::after{content:'';position:absolute;inset:0;right:calc(100% - var(--upd-progress,0%));background:#7ab4f5;border-radius:2px;transition:right .3s}
+.updater-btns{display:flex;gap:8px;flex-wrap:wrap}
+.updater-btn-primary{background:#355ea0 !important;color:#fff !important;border-color:#4a73b8 !important}
+.updater-btn-primary:hover{background:#4a73b8 !important}
+.updater-auto-label{display:flex;align-items:center;gap:8px;font-size:12px;color:#8b8896;cursor:pointer;user-select:none}
+.updater-auto-label input[type=checkbox]{accent-color:#7ab4f5;width:14px;height:14px;cursor:pointer}

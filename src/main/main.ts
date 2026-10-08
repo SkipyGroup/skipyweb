@@ -1,4 +1,4 @@
-﻿import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, net, session, shell, WebContentsView, type MenuItemConstructorOptions } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, net, session, shell, WebContentsView, type MenuItemConstructorOptions } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
@@ -9,8 +9,11 @@ import { flushLibrary, getLibrary, id, loadLibrary, saveLibrary, validFavicon, t
 import { clearRequests, flushPrivacy, hostForUrl, isBlocked, isFingerprintEnabled, loadPrivacy, recordRequest, requestSummary, secret, setFingerprintEnabled, siteForUrl, toggleBlock } from './privacy'
 import { adblockEnabled, clearOnExit, cosmeticCss, flushSwp, isAdRequest, loadSwp, permissionFor, popupFor, recordAdBlocked, recordPopupBlocked, setPermission, setPopup, swpData, toggleAdblock, toggleClearOnExit, updateLists, type SwpPermission } from './swp'
 import { SdtService } from './sdt'
+import { ImageStepperService, type StepperConfig } from './stepper'
+import { UpdateService } from './updater'
 
 const TOOLBAR_HEIGHT = 94
+const FIND_BAR_HEIGHT = 40
 const PANEL_WIDTH = 350
 const HOME_URL = 'skipy://home'
 const privateMode = process.argv.includes('--skipy-private')
@@ -43,9 +46,28 @@ const tabs: Tab[] = []
 const closeTimers = new Map<string, ReturnType<typeof setTimeout>>()
 let activeId = ''
 let globalBassDb = 0
-let globalBassFrequency = 95
+let globalBassFrequency = 80
 let window: BrowserWindow
 let sdt: SdtService | null = null
+const stepper = new ImageStepperService(
+  () => publish(),
+  (filename, fullPath, url) => {
+    const downloads = getLibrary().downloads
+    downloads.unshift({
+      id: id(),
+      name: filename,
+      path: fullPath,
+      url,
+      total: 0,
+      received: 0,
+      status: 'completed',
+      startedAt: Date.now(),
+    })
+    saveLibrary()
+    publish()
+  }
+)
+const updateService = new UpdateService(() => publish())
 let nextId = 1
 let panel: 'bookmarks' | 'history' | 'downloads' | 'settings' | 'privacy' | 'extensions' | null = null
 let panelView: WebContentsView | null = null
@@ -61,7 +83,7 @@ let swpPromptAttached = false
 let panelRemoveTimer: ReturnType<typeof setTimeout> | null = null
 let popupTimer: ReturnType<typeof setTimeout> | null = null
 let downloadsOpen = false
-let toolPopover: 'certificate' | 'bass' | null = null
+let toolPopover: 'certificate' | 'bass' | 'stepper' | null = null
 let toolView: WebContentsView | null = null
 let toolAttached = false
 let toolAnchor = { x: 0, y: 0, width: 24, height: 24 }
@@ -75,6 +97,15 @@ let suggestionsView: WebContentsView | null = null
 let suggestionsAttached = false
 let suggestionsReady = false
 let suggestionsPopup: { rows: SuggestionRow[]; selected: number; bounds: Electron.Rectangle } | null = null
+let findInPageOpen = false
+let findLastQuery = ''
+let findActiveMatch = 0
+let findTotalMatches = 0
+const closedTabs: { url: string; title: string }[] = []
+
+function currentToolbarHeight() {
+  return TOOLBAR_HEIGHT + (findInPageOpen ? FIND_BAR_HEIGHT : 0)
+}
 let appFullscreen = false
 let videoFullscreenTabId: string | null = null
 let transitionView: WebContentsView | null = null
@@ -119,6 +150,8 @@ function publicState() {
     panel,
     downloadsOpen,
     toolPopover,
+    stepper: stepper.getState(),
+    updater: updateService.getState(),
     globalBassDb,
     globalBassFrequency,
     certificate: activeTab?.certificate ?? { status: 'none' },
@@ -130,6 +163,14 @@ function publicState() {
     swp: current()?.site ? { site: current()!.site!, adblock: adblockEnabled(current()!.site!), blockedSite: blockedAdsBySite.get(current()!.site!) ?? 0, blockedTotal: swpData().blockedTotal, popupBlockedTotal: swpData().popupBlockedTotal, listUpdatedAt: swpData().listUpdatedAt, listStatus: swpData().listStatus, permissions: swpData().permissions[current()!.site!] ?? {}, popup: popupFor(current()!.site!), clearOnExit: clearOnExit(current()!.site!), storage: storageBySite.get(current()!.site!) ?? { cookies: 0, bytes: 0 } } : null,
     library: getLibrary(),
     privacy: null,
+    platform: process.platform,
+    findInPage: {
+      open: findInPageOpen,
+      query: findLastQuery,
+      activeMatch: findActiveMatch,
+      totalMatches: findTotalMatches,
+    },
+    hasClosedTabs: closedTabs.length > 0,
     tabs: tabs.map(({ id, title, url, favicon, loading, loadEpoch, audible, muted, bassDb, bassStatus, error, closing, hibernated, view }) => ({
       id, title, url, favicon, loading, loadEpoch, audible, muted, bassDb, bassStatus, error, closing, hibernated,
       canGoBack: view?.webContents.navigationHistory.canGoBack() ?? false,
@@ -302,14 +343,14 @@ function layout() {
     if (downloadsOpen && downloadsView && !downloadsAttached && !downloadsView.webContents.isLoadingMainFrame()) { window.contentView.addChildView(downloadsView); downloadsAttached = true }
     if (toolPopover && toolView && !toolAttached && !toolView.webContents.isLoadingMainFrame()) { window.contentView.addChildView(toolView); toolAttached = true }
   }
-  const top = full ? 0 : TOOLBAR_HEIGHT
+  const top = full ? 0 : currentToolbarHeight()
   for (const tab of tabs) {
     if (tab.view && tab.id === activeId) {
       setViewBounds(tab.view, { x: 0, y: top, width: Math.max(0, width), height: Math.max(0, height - top) })
     }
   }
   if (transitionView) setViewBounds(transitionView, { x: 0, y: 0, width, height })
-  if (panelView) setViewBounds(panelView, { x: Math.max(0, width - PANEL_WIDTH), y: TOOLBAR_HEIGHT, width: Math.min(PANEL_WIDTH, width), height: Math.max(0, height - TOOLBAR_HEIGHT) })
+  if (panelView) setViewBounds(panelView, { x: Math.max(0, width - PANEL_WIDTH), y: top, width: Math.min(PANEL_WIDTH, width), height: Math.max(0, height - top) })
   if (downloadsView) setViewBounds(downloadsView, { x: Math.max(0, Math.min(width - 330, Math.round(downloadsButton.x + downloadsButton.width - 330))), y: 42, width: Math.min(330, width), height: Math.min(420, Math.max(0, height - 42)) })
   if (downloadConfirmView) setViewBounds(downloadConfirmView, { x: 0, y: 0, width, height })
   if (jsDialogView) setViewBounds(jsDialogView, { x: 0, y: 0, width, height })
@@ -317,7 +358,7 @@ function layout() {
   if (suggestionsView && suggestionsPopup) setViewBounds(suggestionsView, suggestionsPopup.bounds)
   if (toolView) {
     const margin = 8
-    const popoverWidth = Math.max(0, Math.min(340, width - margin * 2))
+    const popoverWidth = Math.max(0, Math.min(toolPopover === 'stepper' ? 360 : 340, width - margin * 2))
     const preferredY = Math.round(toolAnchor.y + toolAnchor.height + 6)
     const y = Math.max(42, Math.min(Math.max(42, height - 150), preferredY))
     const x = Math.max(margin, Math.min(Math.max(margin, width - popoverWidth - margin), Math.round(toolAnchor.x)))
@@ -408,11 +449,11 @@ function setDownloadsOpen(open: boolean) {
   publish()
 }
 
-function setToolPopover(kind: 'certificate' | 'bass' | null, anchor?: { x: number; y: number; width: number; height: number }) {
+function setToolPopover(kind: 'certificate' | 'bass' | 'stepper' | null, anchor?: { x: number; y: number; width: number; height: number }) {
   toolPopover = toolPopover === kind ? null : kind
   if (anchor) toolAnchor = anchor
   if (toolPopover) {
-    toolContentHeight = toolPopover === 'certificate' ? 150 : 280
+    toolContentHeight = toolPopover === 'certificate' ? 150 : toolPopover === 'stepper' ? 440 : 280
     ensureToolView()
   } else if (toolView && toolAttached) {
     window.contentView.removeChildView(toolView)
@@ -494,6 +535,14 @@ function showTab(id: string) {
   if (next.view) window.contentView.addChildView(next.view)
   sdt?.pageAttached()
   for (const [overlay, attached] of [[panelView, panelAttached], [downloadsView, downloadsAttached], [toolView, toolAttached]] as const) if (overlay && attached) { window.contentView.removeChildView(overlay); window.contentView.addChildView(overlay) }
+  if (findInPageOpen) {
+    if (findLastQuery && next.view && !next.view.webContents.isDestroyed()) {
+      next.view.webContents.findInPage(findLastQuery, { forward: true, findNext: false })
+    } else {
+      findActiveMatch = 0
+      findTotalMatches = 0
+    }
+  }
   layout()
   publish()
 }
@@ -846,6 +895,12 @@ function attachPage(tab: Tab) {
     if (isMainFrame) { tab.certificate = { status: 'error', host: /^https:\/\//i.test(url) ? new URL(url).host : undefined, error }; publish() }
   })
   wc.on('before-input-event', (event, input) => handleShortcut(input, event))
+  wc.on('found-in-page', (_event, result) => {
+    if (tab.id !== activeId) return
+    findActiveMatch = result.activeMatchOrdinal
+    findTotalMatches = result.matches
+    publish()
+  })
   wc.on('did-navigate-in-page', () => { if (tab.id === activeId) sdt?.bind() })
   wc.on('render-process-gone', () => sdt?.navigation(tab.id))
   wc.on('destroyed', () => sdt?.navigation(tab.id))
@@ -920,6 +975,13 @@ function finishCloseTab(id: string) {
   if (timer) clearTimeout(timer)
   closeTimers.delete(id)
   const [tab] = tabs.splice(index, 1)
+  if (stepper.getState().running && tab.id === activeId) {
+    stepper.stop('A letöltési lap bezárult')
+  }
+  if (tab.url && tab.url !== HOME_URL) {
+    closedTabs.push({ url: tab.url, title: tab.title || tab.url })
+    if (closedTabs.length > 25) closedTabs.shift()
+  }
   for (let i = swpPrompts.length - 1; i >= 0; i--) if (swpPrompts[i].tabId === id) { swpPrompts[i].callback?.(false); swpPrompts.splice(i, 1) }
   oncePermissions.delete(`${id}:${tab.site ?? ''}`)
   syncSwpPrompt()
@@ -937,6 +999,95 @@ function finishCloseTab(id: string) {
     else publish()
   }
   else publish()
+}
+
+function restoreClosedTab() {
+  const item = closedTabs.pop()
+  if (item) {
+    const tab = createTab(item.url, true)
+    notice(`Lap újranyitva: ${item.title || item.url}`, 'success')
+    return tab
+  } else {
+    notice('Nincs nemrég bezárt lap.', 'error')
+  }
+}
+
+function adjustZoom(delta: number) {
+  const tab = current()
+  if (!tab?.view || tab.view.webContents.isDestroyed()) return
+  const currentFactor = tab.view.webContents.getZoomFactor()
+  const nextFactor = Math.min(3.0, Math.max(0.3, Math.round((currentFactor + delta) * 10) / 10))
+  tab.view.webContents.setZoomFactor(nextFactor)
+  notice(`Nagyítás: ${Math.round(nextFactor * 100)}%`, 'success')
+}
+
+function resetZoom() {
+  const tab = current()
+  if (!tab?.view || tab.view.webContents.isDestroyed()) return
+  tab.view.webContents.setZoomFactor(1.0)
+  notice('Nagyítás: 100%', 'success')
+}
+
+function cycleTabs(delta: number) {
+  const nonClosing = tabs.filter(t => !t.closing)
+  if (nonClosing.length <= 1) return
+  const currentIdx = nonClosing.findIndex(t => t.id === activeId)
+  if (currentIdx < 0) return
+  const nextIdx = (currentIdx + delta + nonClosing.length) % nonClosing.length
+  showTab(nonClosing[nextIdx].id)
+}
+
+function selectTabByIndex(index: number) {
+  const nonClosing = tabs.filter(t => !t.closing)
+  if (index >= 0 && index < nonClosing.length) {
+    showTab(nonClosing[index].id)
+  }
+}
+
+function startFind(text: string, forward = true, findNext = false) {
+  const tab = current()
+  findLastQuery = text
+  if (!tab?.view || tab.view.webContents.isDestroyed()) {
+    findActiveMatch = 0
+    findTotalMatches = 0
+    publish()
+    return
+  }
+  if (!text) {
+    tab.view.webContents.stopFindInPage('clearSelection')
+    findActiveMatch = 0
+    findTotalMatches = 0
+    publish()
+    return
+  }
+  tab.view.webContents.findInPage(text, { forward, findNext })
+}
+
+function stopFind(clearSelection = true) {
+  const tab = current()
+  if (tab?.view && !tab.view.webContents.isDestroyed()) {
+    tab.view.webContents.stopFindInPage(clearSelection ? 'clearSelection' : 'keepSelection')
+  }
+  findInPageOpen = false
+  findActiveMatch = 0
+  findTotalMatches = 0
+  layout()
+  publish()
+}
+
+function toggleFindInPage(open?: boolean) {
+  const next = open ?? !findInPageOpen
+  findInPageOpen = next
+  if (!findInPageOpen) {
+    stopFind(true)
+  } else {
+    layout()
+    publish()
+    if (findLastQuery) {
+      startFind(findLastQuery, true, false)
+    }
+    window.webContents.send('browser:focus-find')
+  }
 }
 
 function toggleDevTools() {
@@ -974,19 +1125,88 @@ function handleShortcut(input: Electron.Input, event?: { preventDefault(): void 
     window.setFullScreen(appFullscreen)
     layout(); publish()
   }
-  else if (key === 'escape' && appFullscreen && !videoFullscreenTabId) {
-    event?.preventDefault()
-    appFullscreen = false
-    window.setFullScreen(false)
-    layout(); publish()
+  else if (key === 'escape') {
+    if (findInPageOpen) {
+      event?.preventDefault()
+      toggleFindInPage(false)
+      return
+    }
+    if (appFullscreen && !videoFullscreenTabId) {
+      event?.preventDefault()
+      appFullscreen = false
+      window.setFullScreen(false)
+      layout(); publish()
+    }
   }
   else if (videoFullscreenTabId) return
+  else if (ctrl && input.shift && key === 't') {
+    event?.preventDefault()
+    restoreClosedTab()
+  }
+  else if (ctrl && key === 'f') {
+    event?.preventDefault()
+    toggleFindInPage(true)
+  }
+  else if (ctrl && (key === '+' || key === '=' || key === 'add')) {
+    event?.preventDefault()
+    adjustZoom(0.1)
+  }
+  else if (ctrl && (key === '-' || key === 'subtract')) {
+    event?.preventDefault()
+    adjustZoom(-0.1)
+  }
+  else if (ctrl && (key === '0' || key === 'num0')) {
+    event?.preventDefault()
+    resetZoom()
+  }
+  else if (key === 'f5') {
+    event?.preventDefault()
+    if (ctrl || input.shift) current()?.view?.webContents.reloadIgnoringCache()
+    else current()?.view?.webContents.reload()
+  }
+  else if (ctrl && input.shift && key === 'r') {
+    event?.preventDefault()
+    current()?.view?.webContents.reloadIgnoringCache()
+  }
+  else if (ctrl && key === 'r') {
+    event?.preventDefault()
+    current()?.view?.webContents.reload()
+  }
+  else if (ctrl && key === 'tab') {
+    event?.preventDefault()
+    cycleTabs(input.shift ? -1 : 1)
+  }
+  else if (ctrl && ['1', '2', '3', '4', '5', '6', '7', '8', '9'].includes(key)) {
+    event?.preventDefault()
+    selectTabByIndex(key === '9' ? tabs.length - 1 : parseInt(key, 10) - 1)
+  }
+  else if (ctrl && key === 'h') {
+    event?.preventDefault()
+    panel = panel === 'history' ? null : 'history'
+    syncPanelOverlay()
+  }
+  else if (ctrl && key === 'j') {
+    event?.preventDefault()
+    setDownloadsOpen(!downloadsOpen)
+  }
+  else if (ctrl && (key === 'b' || (input.shift && key === 'o'))) {
+    event?.preventDefault()
+    panel = panel === 'bookmarks' ? null : 'bookmarks'
+    syncPanelOverlay()
+  }
+  else if (ctrl && key === 'd') {
+    event?.preventDefault()
+    toggleBookmark()
+  }
+  else if (ctrl && key === 'p') {
+    event?.preventDefault()
+    current()?.view?.webContents.print()
+  }
   else if (ctrl && key === 'l') window.webContents.send('browser:focus-address')
   else if (ctrl && key === 't') { createTab(); window.webContents.send('browser:focus-address') }
   else if (ctrl && key === 'w') closeTab(activeId)
   else if (input.alt && key === 'left') current()?.view?.webContents.navigationHistory.goBack()
   else if (input.alt && key === 'right') current()?.view?.webContents.navigationHistory.goForward()
-  else if (ctrl && key === 'r') current()?.view?.webContents.reload()
 }
 
 function launchBrowserWindow(isPrivate: boolean) {
@@ -1357,11 +1577,15 @@ function trackDownloads() {
 
 if (hasSingleInstanceLock) void app.whenReady().then(() => {
   loadLibrary()
+  const imageDirectory = getLibrary().settings.imageDownloadDirectory
+  stepper.setTargetDirectory(typeof imageDirectory === 'string' && path.isAbsolute(imageDirectory) ? imageDirectory : app.getPath('downloads'))
   loadPrivacy()
   loadSwp()
   void loadSavedExtensions()
   configurePlatformQuickActions()
   void updateLists().then(() => publish())
+  // Auto-check for updates 10s after startup (if enabled in settings)
+  setTimeout(() => { if (getLibrary().settings.autoCheckUpdates) void updateService.checkForUpdates() }, 10_000)
   ipcMain.on('privacy:fingerprint-config', event => {
     const tab = tabs.find(item => item.view?.webContents.id === event.sender.id)
     const site = tab?.site || siteForUrl(event.sender.getURL())
@@ -1415,13 +1639,15 @@ if (hasSingleInstanceLock) void app.whenReady().then(() => {
   window = new BrowserWindow({
     width: 1280, height: 820, minWidth: 680, minHeight: 400,
     title: privateMode ? 'Skipy Browser – Inkognitó' : 'Skipy Browser', backgroundColor: '#111113',
-    frame: process.platform !== 'darwin',
+    frame: false,
+    autoHideMenuBar: true,
     ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: { x: 14, y: 13 } } : {}),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false, contextIsolation: true, sandbox: true,
     },
   })
+  Menu.setApplicationMenu(null)
   sdt = new SdtService({
     window,
     dataPath: path.join(app.getPath('userData'), 'skipy-data'),
@@ -1440,6 +1666,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(() => {
   const transitionCss = `html{margin:0;width:100%;height:100%;background:transparent}body{margin:0;width:100%;height:100%;background:#080809;overflow:hidden;opacity:1;transition:opacity .28s cubic-bezier(.22,1,.36,1)}body.reveal{opacity:0}body:after{content:"";position:absolute;left:50%;top:50%;width:42vmax;height:42vmax;border-radius:50%;background:radial-gradient(circle,#17100c 0,#0b0908 35%,#080809 72%);transform:translate(-50%,-50%) scale(.7);opacity:.55}body.zoom:after{animation:zoom .42s cubic-bezier(.22,1,.36,1) both}@keyframes zoom{to{transform:translate(-50%,-50%) scale(1.45);opacity:.16}}@media(prefers-reduced-motion:reduce){body,body.zoom:after{transition:none;animation:none}}`
   void transitionSurface.webContents.loadURL(dataPage('', transitionCss)).catch(() => undefined)
   window.on('closed', () => {
+    stepper.stop('A böngésző bezárult')
     void sdt?.dispose().catch(() => undefined)
     if (pendingJsDialog) answerJsDialog(pendingJsDialog.id, false)
     for (const prompt of swpPrompts.splice(0)) prompt.callback?.(false)
@@ -1504,10 +1731,50 @@ if (hasSingleInstanceLock) void app.whenReady().then(() => {
     if (action === 'tab-context-menu') {
       if (event.sender !== window.webContents) return
       const tab = tabs.find(item => item.id === text); if (!tab) return
+      const tabIndex = tabs.findIndex(item => item.id === text)
+      const shortcutHint = process.platform === 'darwin' ? '⌘⇧T' : 'Ctrl+Shift+T'
       Menu.buildFromTemplate([
+        { label: 'Új lap jobbra', click: () => {
+          const newTab = createTab(configuredHome(), true)
+          const curr = tabs.findIndex(t => t.id === newTab.id)
+          if (curr >= 0) {
+            const [t] = tabs.splice(curr, 1)
+            tabs.splice(tabIndex + 1, 0, t)
+            publish()
+          }
+        }},
+        { label: 'Lap megkettőzése', click: () => {
+          if (tab.url) {
+            const newTab = createTab(tab.url, true)
+            const curr = tabs.findIndex(t => t.id === newTab.id)
+            if (curr >= 0) {
+              const [t] = tabs.splice(curr, 1)
+              tabs.splice(tabIndex + 1, 0, t)
+              publish()
+            }
+          }
+        }},
+        { label: tab.muted ? 'Hang visszakapcsolása' : 'Lap némítása', enabled: !tab.hibernated, click: () => {
+          tab.muted = !tab.muted
+          if (tab.audioView && !tab.audioView.webContents.isDestroyed()) tab.audioView.webContents.send('audio:update', tab.bassDb, globalBassFrequency, tab.muted)
+          else tab.view?.webContents.setAudioMuted(tab.muted)
+          publish()
+        }},
+        { type: 'separator' },
         { label: tab.hibernated ? 'Lap felébresztése' : 'Lap hibernálása', enabled: tab.id !== activeId || tab.hibernated, click: () => tab.hibernated ? showTab(tab.id) : hibernateTab(tab.id) },
         { label: 'Újratöltés', enabled: !tab.hibernated, click: () => tab.view?.webContents.reload() },
-        { type: 'separator' }, { label: 'Lap bezárása', click: () => closeTab(tab.id) },
+        { type: 'separator' },
+        { label: 'Más lapok bezárása', enabled: tabs.filter(t => !t.closing).length > 1, click: () => {
+          for (const other of tabs) if (other.id !== tab.id && !other.closing) closeTab(other.id)
+        }},
+        { label: 'Jobbra lévő lapok bezárása', enabled: tabIndex < tabs.length - 1, click: () => {
+          for (let i = tabs.length - 1; i > tabIndex; i--) if (!tabs[i].closing) closeTab(tabs[i].id)
+        }},
+        { label: 'Lap bezárása', click: () => closeTab(tab.id) },
+        ...(closedTabs.length > 0 ? [
+          { type: 'separator' as const },
+          { label: `Legutóbb bezárt lap újranyitása (${shortcutHint})`, click: () => restoreClosedTab() }
+        ] : [])
       ]).popup({ window })
       return
     }
@@ -1573,6 +1840,24 @@ if (hasSingleInstanceLock) void app.whenReady().then(() => {
       if (event.sender === window.webContents && tabs.find(tab => tab.id === text)?.closing) finishCloseTab(text)
       return
     }
+    else if (action === 'reopen-closed-tab') restoreClosedTab()
+    else if (action === 'find-start') {
+      try {
+        const parsed = JSON.parse(text) as { text?: string; forward?: boolean; next?: boolean }
+        startFind(parsed.text ?? '', parsed.forward ?? true, parsed.next ?? false)
+      } catch {
+        startFind(text, true, false)
+      }
+    }
+    else if (action === 'find-stop') stopFind(true)
+    else if (action === 'find-toggle') toggleFindInPage()
+    else if (action === 'zoom-in') adjustZoom(0.1)
+    else if (action === 'zoom-out') adjustZoom(-0.1)
+    else if (action === 'zoom-reset') resetZoom()
+    else if (action === 'duplicate-tab') {
+      const tab = tabs.find(t => t.id === text) || current()
+      if (tab?.url) createTab(tab.url, true)
+    }
     else if (action === 'toggle-mute') {
       const tab = tabs.find(item => item.id === text)
       if (tab?.view && !tab.view.webContents.isDestroyed()) {
@@ -1584,14 +1869,14 @@ if (hasSingleInstanceLock) void app.whenReady().then(() => {
     else if (action === 'bass-set') {
       try {
         const value = JSON.parse(text) as { db: number; frequency: number }
-        if (Number.isInteger(value.db) && value.db >= 0 && value.db <= 12 && Number.isInteger(value.frequency) && value.frequency >= 60 && value.frequency <= 160) setGlobalBass(value.db, value.frequency)
+        if (Number.isInteger(value.db) && value.db >= 0 && value.db <= 6 && Number.isInteger(value.frequency) && value.frequency >= 60 && value.frequency <= 100) setGlobalBass(value.db, value.frequency)
       } catch { /* Ignore invalid audio controls. */ }
     }
     else if (action === 'tool') {
       if (event.sender !== window.webContents) return
       try {
-        const request = JSON.parse(text) as { kind: 'certificate' | 'bass'; anchor: { x: number; y: number; width: number; height: number } }
-        if ((request.kind === 'certificate' || request.kind === 'bass') && request.anchor && ['x', 'y', 'width', 'height'].every(key => typeof request.anchor[key as keyof typeof request.anchor] === 'number' && Number.isFinite(request.anchor[key as keyof typeof request.anchor]))) setToolPopover(request.kind, request.anchor)
+        const request = JSON.parse(text) as { kind: 'certificate' | 'bass' | 'stepper'; anchor: { x: number; y: number; width: number; height: number } }
+        if ((request.kind === 'certificate' || request.kind === 'bass' || request.kind === 'stepper') && request.anchor && ['x', 'y', 'width', 'height'].every(key => typeof request.anchor[key as keyof typeof request.anchor] === 'number' && Number.isFinite(request.anchor[key as keyof typeof request.anchor]))) setToolPopover(request.kind, request.anchor)
       } catch { /* Ignore invalid controls. */ }
       return
     }
@@ -1601,12 +1886,66 @@ if (hasSingleInstanceLock) void app.whenReady().then(() => {
       if (Number.isFinite(requested)) {
         // scrollHeight excludes the popover's two one-pixel borders. Without
         // them Chromium exposes a scrollbar even when all content is visible.
-        const nextHeight = Math.max(80, Math.min(toolPopover === 'certificate' ? 350 : 310, Math.ceil(requested) + 2))
+        const maxHeight = toolPopover === 'certificate' ? 350 : toolPopover === 'stepper' ? 650 : 310
+        const nextHeight = Math.max(80, Math.min(maxHeight, Math.ceil(requested) + 2))
         if (nextHeight !== toolContentHeight) { toolContentHeight = nextHeight; layout() }
       }
       return
     }
     else if (action === 'tool-close') { setToolPopover(null); return }
+    else if (action === 'stepper-start') {
+      const tab = current()
+      if (tab?.view && !tab.view.webContents.isDestroyed()) {
+        let configPatch: Partial<StepperConfig> | undefined
+        if (text) {
+          try { configPatch = JSON.parse(text) } catch { /* ignore */ }
+        }
+        void stepper.start({
+          id: tab.id,
+          url: tab.url,
+          contents: tab.view.webContents,
+        }, configPatch)
+      }
+      return
+    }
+    else if (action === 'stepper-pause') {
+      stepper.pause()
+      return
+    }
+    else if (action === 'stepper-resume') {
+      stepper.resume()
+      return
+    }
+    else if (action === 'stepper-stop') {
+      stepper.stop()
+      return
+    }
+    else if (action === 'stepper-folder') {
+      if (stepper.getState().running) return
+      void dialog.showOpenDialog(window, {
+        title: 'Képletöltés célmappája',
+        defaultPath: stepper.getState().targetFolder,
+        properties: ['openDirectory', 'createDirectory'],
+      }).then(async result => {
+        if (result.canceled || !result.filePaths[0] || stepper.getState().running) return
+        const directory = result.filePaths[0]
+        getLibrary().settings.imageDownloadDirectory = directory
+        stepper.setTargetDirectory(directory)
+        await flushLibrary()
+      }).catch(() => notice('Nem sikerült kiválasztani vagy megjegyezni a célmappát', 'error'))
+      return
+    }
+    else if (action === 'stepper-reveal') {
+      stepper.revealFolder()
+      return
+    }
+    else if (action === 'stepper-config') {
+      try {
+        const patch = JSON.parse(text)
+        if (patch && typeof patch === 'object') stepper.updateConfig(patch)
+      } catch { /* ignore */ }
+      return
+    }
     else if (action === 'navigate') navigate(text)
     else if (action === 'home') navigate(configuredHome() === HOME_URL ? '' : configuredHome())
     else if (action === 'back') current()?.view?.webContents.navigationHistory.goBack()
@@ -1759,6 +2098,15 @@ if (hasSingleInstanceLock) void app.whenReady().then(() => {
     else if (action === 'swp-clear-site') { const site = current()?.site; if (site) { const run = () => void clearSiteData(site).then(() => notice('A webhely helyi adatai törölve.')).catch(() => notice('A webhelyadatok törlése nem sikerült.', 'error')); if (runningDownloads.size || current()?.audible) { swpPrompts.push({ id: id(), kind: 'clear-data', site, target: 'site', tabId: activeId, callback: allow => { if (allow) run() } }); syncSwpPrompt() } else run() } }
     else if (action === 'swp-clear-all') { const run = () => void session.defaultSession.clearStorageData().then(() => { storageBySite.clear(); notice('Minden webhelyadat törölve.'); publish() }).catch(() => notice('A webhelyadatok törlése nem sikerült.', 'error')); if (runningDownloads.size || tabs.some(tab => tab.audible)) { swpPrompts.push({ id: id(), kind: 'clear-data', site: 'Minden webhely', target: 'all', tabId: activeId, callback: allow => { if (allow) run() } }); syncSwpPrompt() } else run() }
     else if (action === 'swp-update-lists') { void updateLists(true).then(ok => notice(ok ? 'Az SWP szűrőlisták frissültek.' : 'A szűrőlisták frissítése nem sikerült.', ok ? 'success' : 'error')).finally(() => publish()) }
+    else if (action === 'updater-check') { void updateService.checkForUpdates() }
+    else if (action === 'updater-download') { void updateService.downloadUpdate() }
+    else if (action === 'updater-install') { updateService.installUpdate() }
+    else if (action === 'updater-toggle-auto') {
+      const next = text === 'on'
+      getLibrary().settings.autoCheckUpdates = next
+      saveLibrary()
+      updateService.updateAutoCheck(next)
+    }
     publish()
   })
 })

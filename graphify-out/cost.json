@@ -1,0 +1,13 @@
+{
+  "runs": [
+    {
+      "date": "2026-10-08T20:21:22.084738+00:00",
+      "input_tokens": null,
+      "output_tokens": null,
+      "files": 45
+    }
+  ],
+  "total_input_tokens": null,
+  "total_output_tokens": null,
+  "note": "Semantic token usage unavailable; report zero counters are placeholders."
+}

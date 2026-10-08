@@ -12,10 +12,12 @@ let stream: MediaStream | null = null
 let context: AudioContext | null = null
 let highpass: BiquadFilterNode | null = null
 let shelf: BiquadFilterNode | null = null
-let peak: BiquadFilterNode | null = null
+let input: GainNode | null = null
 let output: GainNode | null = null
 let starting = false
-function outputLevel(db: number, muted: boolean) { return muted ? 0 : Math.pow(10, -Math.max(0, db - 2) * 0.52 / 20) }
+function bassLevel(db: number) { return Number.isFinite(db) ? Math.min(6, Math.max(0, db)) : 0 }
+function bassFrequency(frequency: number) { return Number.isFinite(frequency) ? Math.min(100, Math.max(60, frequency)) : 80 }
+function inputLevel(db: number) { return Math.pow(10, -bassLevel(db) / 20) }
 
 async function stop() {
   stream?.getTracks().forEach(track => track.stop())
@@ -23,11 +25,11 @@ async function stop() {
   output?.disconnect()
   highpass?.disconnect()
   shelf?.disconnect()
-  peak?.disconnect()
+  input?.disconnect()
   output = null
   highpass = null
   shelf = null
-  peak = null
+  input = null
   if (context) await context.close().catch(() => undefined)
   context = null
 }
@@ -43,6 +45,10 @@ window.skipyAudio.onStart(async (db, frequency, muted) => {
     const track = stream.getAudioTracks()[0]
     if (!track) throw new Error('Nincs hangcsatorna a lapon.')
     context = new AudioContext()
+    db = bassLevel(db)
+    frequency = bassFrequency(frequency)
+    input = context.createGain()
+    input.gain.value = inputLevel(db)
     highpass = context.createBiquadFilter()
     highpass.type = 'highpass'
     highpass.frequency.value = 25
@@ -51,11 +57,6 @@ window.skipyAudio.onStart(async (db, frequency, muted) => {
     shelf.type = 'lowshelf'
     shelf.frequency.value = frequency
     shelf.gain.value = db
-    peak = context.createBiquadFilter()
-    peak.type = 'peaking'
-    peak.frequency.value = Math.max(45, frequency * 0.72)
-    peak.Q.value = 0.8
-    peak.gain.value = db * 0.18
     const compressor = context.createDynamicsCompressor()
     compressor.threshold.value = -1.5
     compressor.knee.value = 1
@@ -63,8 +64,8 @@ window.skipyAudio.onStart(async (db, frequency, muted) => {
     compressor.attack.value = 0.002
     compressor.release.value = 0.12
     output = context.createGain()
-    output.gain.value = outputLevel(db, muted)
-    context.createMediaStreamSource(stream).connect(highpass).connect(shelf).connect(peak).connect(compressor).connect(output).connect(context.destination)
+    output.gain.value = muted ? 0 : 1
+    context.createMediaStreamSource(stream).connect(input).connect(highpass).connect(shelf).connect(compressor).connect(output).connect(context.destination)
     await context.resume()
     track.addEventListener('ended', () => { void stop(); window.skipyAudio.status('error', 'A lap hangrögzítése megszakadt.') }, { once: true })
     window.skipyAudio.status('active')
@@ -74,14 +75,13 @@ window.skipyAudio.onStart(async (db, frequency, muted) => {
   } finally { clearTimeout(timeout); starting = false }
 })
 window.skipyAudio.onUpdate((db, frequency, muted) => {
+  db = bassLevel(db)
+  frequency = bassFrequency(frequency)
+  if (input && context) input.gain.setTargetAtTime(inputLevel(db), context.currentTime, 0.045)
   if (shelf && context) {
     shelf.gain.setTargetAtTime(db, context.currentTime, 0.045)
     shelf.frequency.setTargetAtTime(frequency, context.currentTime, 0.045)
   }
-  if (peak && context) {
-    peak.frequency.setTargetAtTime(Math.max(45, frequency * 0.72), context.currentTime, 0.045)
-    peak.gain.setTargetAtTime(db * 0.18, context.currentTime, 0.045)
-  }
-  if (output && context) output.gain.setTargetAtTime(outputLevel(db, muted), context.currentTime, 0.01)
+  if (output && context) output.gain.setTargetAtTime(muted ? 0 : 1, context.currentTime, 0.01)
 })
 window.skipyAudio.onStop(() => { void stop() })

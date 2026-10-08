@@ -1,8 +1,8 @@
 import './style.css'
-import { createIcons, ArrowLeft, ArrowRight, RotateCw, House, Shield, Bookmark, BookOpen, History, Download, SlidersHorizontal, Minus, Square, X, Globe, Search, Grid2X2, Plus, Ellipsis, Pencil, Trash2, Copy, Star, Volume2, VolumeX, AudioLines, LockKeyhole, TriangleAlert, CodeXml, PanelsTopLeft, VenetianMask, Puzzle } from 'lucide'
+import { createIcons, ArrowLeft, ArrowRight, RotateCw, House, Shield, Bookmark, BookOpen, History, Download, SlidersHorizontal, Minus, Square, X, Globe, Search, Grid2X2, Plus, Ellipsis, Pencil, Trash2, Copy, Star, Volume2, VolumeX, AudioLines, LockKeyhole, TriangleAlert, CodeXml, PanelsTopLeft, VenetianMask, Puzzle, ChevronUp, ChevronDown, ImageDown } from 'lucide'
 import { classifyInput } from '../main/input'
 
-const iconSet = { ArrowLeft, ArrowRight, RotateCw, House, Shield, Bookmark, BookOpen, History, Download, SlidersHorizontal, Minus, Square, X, Globe, Search, Grid2X2, Plus, Ellipsis, Pencil, Trash2, Copy, Star, Volume2, VolumeX, AudioLines, LockKeyhole, TriangleAlert, CodeXml, PanelsTopLeft, VenetianMask, Puzzle }
+const iconSet = { ArrowLeft, ArrowRight, RotateCw, House, Shield, Bookmark, BookOpen, History, Download, SlidersHorizontal, Minus, Square, X, Globe, Search, Grid2X2, Plus, Ellipsis, Pencil, Trash2, Copy, Star, Volume2, VolumeX, AudioLines, LockKeyhole, TriangleAlert, CodeXml, PanelsTopLeft, VenetianMask, Puzzle, ChevronUp, ChevronDown, ImageDown }
 function renderIcons() { createIcons({ icons: iconSet, attrs: { 'stroke-width': 2 } }) }
 function icon(name: string) {
   const element = document.createElement('i')
@@ -18,11 +18,65 @@ type HistoryEntry = { id: string; title: string; url: string; visitedAt: number;
 type DownloadEntry = { id: string; name: string; path: string; url: string; received: number; total: number; status: 'progressing' | 'paused' | 'completed' | 'cancelled' | 'interrupted'; startedAt: number }
 type QuickLink = { id: string; title: string; url: string; favicon?: string }
 type Privacy = { site: string; protection: 'active' | 'error' | 'pending'; fingerprintEnabled: boolean; blockedHosts: string[]; rows: { site: string; host: string; count: number; blocked: number; lastSeen: number; blockedNow: boolean }[] }
-type State = { privateMode: boolean; defaultBrowser: boolean; activeId: string; sdtOpen: boolean; globalBassDb: number; globalBassFrequency: number; maximized: boolean; fullscreenMode: 'none' | 'app' | 'video'; tabs: Tab[]; panel: 'bookmarks' | 'history' | 'downloads' | 'settings' | 'privacy' | 'extensions' | null; downloadsOpen: boolean; sessionDownloadIds: string[]; pendingDownload: { id: string; filename: string; host: string; total: number } | null; toolPopover: 'certificate' | 'bass' | null; certificate: CertificateState; pageSafety: { level: 'safe' | 'warning' | 'danger'; title: string; reasons: string[] }; privacy: Privacy | null; swp: { adblock:boolean; listStatus:'bundled'|'updated'|'error' } | null; library: { bookmarks: Bookmark[]; history: HistoryEntry[]; downloads: DownloadEntry[]; quickLinks: QuickLink[]; extensions: {id:string;name:string;path:string;enabled:boolean}[]; settings: { searchEngine: 'google' | 'duckduckgo' | 'bing'; homepage: string; developerMode: boolean; onboardingComplete: boolean; autoHibernateMinutes: number } } }
+type State = {
+  platform?: string
+  findInPage?: {
+    open: boolean
+    query: string
+    activeMatch: number
+    totalMatches: number
+  }
+  hasClosedTabs?: boolean
+  privateMode: boolean
+  defaultBrowser: boolean
+  activeId: string
+  sdtOpen: boolean
+  globalBassDb: number
+  globalBassFrequency: number
+  maximized: boolean
+  fullscreenMode: 'none' | 'app' | 'video'
+  tabs: Tab[]
+  panel: 'bookmarks' | 'history' | 'downloads' | 'settings' | 'privacy' | 'extensions' | null
+  downloadsOpen: boolean
+  sessionDownloadIds: string[]
+  pendingDownload: { id: string; filename: string; host: string; total: number } | null
+  toolPopover: 'certificate' | 'bass' | 'stepper' | null
+  stepper?: {
+    running: boolean
+    paused: boolean
+    currentPage: number
+    downloadedCount: number
+    targetFolder: string
+    statusText: string
+    lastDownloadedFile: string
+    config: any
+  } | null
+  certificate: CertificateState
+  pageSafety: { level: 'safe' | 'warning' | 'danger'; title: string; reasons: string[] }
+  privacy: Privacy | null
+  swp: { adblock: boolean; listStatus: 'bundled' | 'updated' | 'error' } | null
+  library: {
+    bookmarks: Bookmark[]
+    history: HistoryEntry[]
+    downloads: DownloadEntry[]
+    quickLinks: QuickLink[]
+    extensions: { id: string; name: string; path: string; enabled: boolean }[]
+    settings: { searchEngine: 'google' | 'duckduckgo' | 'bing'; homepage: string; developerMode: boolean; onboardingComplete: boolean; autoHibernateMinutes: number; autoCheckUpdates: boolean }
+  }
+  updater?: {
+    status: 'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'ready' | 'error'
+    version: string | null
+    currentVersion: string
+    progress: number
+    errorMessage: string | null
+    autoCheck: boolean
+  }
+}
 type BrowserBridge = {
   command: (action: string, value?: string) => Promise<State | string | void>
   onState: (callback: (state: State) => void) => () => void
   onFocusAddress: (callback: () => void) => () => void
+  onFocusFind?: (callback: () => void) => () => void
   onOverlayClose: (callback: () => void) => () => void
   onDownloadLand: (callback: () => void) => () => void
 }
@@ -33,12 +87,19 @@ const tabsElement = $('tabs')
 const address = $('address') as HTMLInputElement
 const homeSearch = $('home-search') as HTMLInputElement
 const home = $('home-screen')
+const findBar = $('find-bar') as HTMLElement | null
+const findInput = $('find-input') as HTMLInputElement | null
+const findCount = $('find-count') as HTMLElement | null
+const findPrev = $('find-prev') as HTMLButtonElement | null
+const findNext = $('find-next') as HTMLButtonElement | null
+const findClose = $('find-close') as HTMLButtonElement | null
+const reopenClosedTabButton = $('reopen-closed-tab') as HTMLButtonElement | null
 const overlayMode = new URLSearchParams(location.search).get('overlay')
 if (overlayMode === 'panel' || overlayMode === 'downloads' || overlayMode === 'tool' || overlayMode === 'download-confirm') document.body.classList.add(`overlay-${overlayMode}`)
 let overlayClosing = false
 let lastOverlayPanel: State['panel'] = null
 const tabElements = new Map<string, HTMLElement>()
-let state: State = { privateMode: false, defaultBrowser: false, activeId: '', sdtOpen: false, globalBassDb: 0, globalBassFrequency: 95, maximized: false, fullscreenMode: 'none', tabs: [], panel: null, downloadsOpen: false, sessionDownloadIds: [], pendingDownload: null, toolPopover: null, certificate: { status: 'none' }, pageSafety: {level:'safe',title:'',reasons:[]}, privacy: null, swp: null, library: { bookmarks: [], history: [], downloads: [], quickLinks: [], extensions: [], settings: { searchEngine: 'google', homepage: 'skipy', developerMode: false, onboardingComplete: false, autoHibernateMinutes: 15 } } }
+let state: State = { privateMode: false, defaultBrowser: false, activeId: '', sdtOpen: false, globalBassDb: 0, globalBassFrequency: 95, maximized: false, fullscreenMode: 'none', tabs: [], panel: null, downloadsOpen: false, sessionDownloadIds: [], pendingDownload: null, toolPopover: null, certificate: { status: 'none' }, pageSafety: {level:'safe',title:'',reasons:[]}, privacy: null, swp: null, library: { bookmarks: [], history: [], downloads: [], quickLinks: [], extensions: [], settings: { searchEngine: 'google', homepage: 'skipy', developerMode: false, onboardingComplete: false, autoHibernateMinutes: 15, autoCheckUpdates: true } } }
 let homeModeDraft: 'skipy' | 'custom' | null = null
 let homepageDraft: string | null = null
 let settingsError = ''
@@ -585,6 +646,7 @@ function render(next: State) {
   if (overlayMode === 'tool') { renderToolPopover(); renderIcons(); return }
   if (overlayMode === 'download-confirm') { renderDownloadConfirmation(); renderIcons(); return }
   if (overlayMode) { renderPanel(); renderIcons(); return }
+  document.body.classList.toggle('window-maximized', !!state.maximized)
   document.body.classList.toggle('fullscreen', state.fullscreenMode !== 'none')
   document.body.classList.toggle('private-mode', state.privateMode)
   $('onboarding').hidden = state.privateMode || state.library.settings.onboardingComplete
@@ -593,6 +655,32 @@ function render(next: State) {
   setIcon($('window-maximize'), state.maximized ? 'copy' : 'square')
   $('window-maximize').setAttribute('aria-label', state.maximized ? 'Visszaállítás' : 'Nagyítás')
   $('window-maximize').title = state.maximized ? 'Visszaállítás' : 'Nagyítás'
+  if (findBar && findCount && findInput) {
+    const isFindOpen = !!state.findInPage?.open
+    findBar.hidden = !isFindOpen
+    if (isFindOpen) {
+      if (document.activeElement !== findInput && state.findInPage?.query && findInput.value !== state.findInPage.query) {
+        findInput.value = state.findInPage.query
+      }
+      if (state.findInPage && state.findInPage.query) {
+        if (state.findInPage.totalMatches > 0) {
+          findCount.textContent = `${state.findInPage.activeMatch} / ${state.findInPage.totalMatches}`
+        } else {
+          findCount.textContent = 'Nincs találat'
+        }
+      } else {
+        findCount.textContent = ''
+      }
+    }
+  }
+  const isMac = state.platform === 'darwin' || (!state.platform && navigator.platform.includes('Mac'))
+  document.querySelectorAll<HTMLElement>('.kbd-shortcut').forEach(el => {
+    const text = isMac ? el.dataset.mac : el.dataset.win
+    if (text) el.textContent = text
+  })
+  if (reopenClosedTabButton) {
+    reopenClosedTabButton.disabled = !state.hasClosedTabs
+  }
   if (state.panel !== 'settings') { homeModeDraft = null; homepageDraft = null; settingsError = '' }
   const active = state.tabs.find(tab => tab.id === state.activeId)
   const security = $('site-security')
@@ -604,6 +692,14 @@ function render(next: State) {
   $('bookmark-toggle').classList.toggle('bookmarked', favoriteActive)
   $('bookmark-toggle').title = favoriteActive ? 'Eltávolítás a kedvencekből' : 'Kedvencekhez adás'
   $('show-bass').classList.toggle('bass-active', state.globalBassDb > 0)
+  const stepperBtn = $('show-stepper')
+  if (stepperBtn) {
+    stepperBtn.classList.toggle('selected', state.toolPopover === 'stepper')
+    stepperBtn.classList.toggle('stepper-running', !!state.stepper?.running)
+    stepperBtn.title = state.stepper?.running
+      ? `Képletöltő aktív: ${state.stepper.downloadedCount} kép letöltve (${state.stepper.currentPage}. lap)`
+      : 'Automata képletöltő és lapozó'
+  }
   $('show-sdt').hidden = !state.library.settings.developerMode
   $('show-extensions').classList.toggle('selected', state.panel === 'extensions')
   $('show-sdt').classList.toggle('selected', !!state.sdtOpen)
@@ -733,6 +829,13 @@ window.browser.onDownloadLand(() => {
 })
 renderIcons()
 window.browser.onFocusAddress(focusAddress)
+window.browser.onFocusFind?.(() => {
+  if (findBar) findBar.hidden = false
+  if (findInput) {
+    findInput.focus()
+    findInput.select()
+  }
+})
 void window.browser.command('state').then(result => { if (result && typeof result !== 'string') render(result) })
 
 $('address-form').addEventListener('submit', event => { event.preventDefault(); closeSuggestions(address); command('navigate', address.value); address.blur() })
@@ -743,11 +846,12 @@ $('home').addEventListener('click', () => command('home'))
 $('bookmark-toggle').addEventListener('click', () => command('bookmark-toggle'))
 $('onboarding-finish').addEventListener('click', () => command('onboarding-complete'))
 $('copy-link').addEventListener('click', () => command('copy-current-url'))
-function openTool(kind: 'certificate' | 'bass', element: HTMLElement) {
+function openTool(kind: 'certificate' | 'bass' | 'stepper', element: HTMLElement) {
   const rect = element.getBoundingClientRect()
   command('tool', JSON.stringify({ kind, anchor: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } }))
 }
 $('site-security').addEventListener('click', () => openTool('certificate', $('site-security')))
+$('show-stepper').addEventListener('click', () => openTool('stepper', $('show-stepper')))
 $('show-bass').addEventListener('click', () => openTool('bass', $('show-bass')))
 $('show-bookmarks').addEventListener('click', () => command('panel', 'bookmarks'))
 $('show-history').addEventListener('click', () => command('panel', 'history'))

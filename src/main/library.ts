@@ -5,12 +5,12 @@ import path from 'node:path'
 export type Bookmark = { id: string; title: string; url: string; createdAt: number; favicon?: string; folder?: string }
 export type HistoryEntry = { id: string; title: string; url: string; visitedAt: number; favicon?: string }
 export type DownloadEntry = { id: string; name: string; path: string; url: string; received: number; total: number; status: 'progressing' | 'paused' | 'completed' | 'cancelled' | 'interrupted'; startedAt: number }
-export type Settings = { searchEngine: 'google' | 'duckduckgo' | 'bing'; homepage: string; developerMode: boolean; onboardingComplete: boolean; autoHibernateMinutes: number }
+export type Settings = { searchEngine: 'google' | 'duckduckgo' | 'bing'; homepage: string; developerMode: boolean; onboardingComplete: boolean; autoHibernateMinutes: number; autoCheckUpdates: boolean; imageDownloadDirectory?: string }
 export type QuickLink = { id: string; title: string; url: string; favicon?: string }
 export type ExtensionEntry = { id: string; name: string; path: string; enabled: boolean }
 export type Library = { bookmarks: Bookmark[]; history: HistoryEntry[]; downloads: DownloadEntry[]; quickLinks: QuickLink[]; extensions: ExtensionEntry[]; settings: Settings }
 
-const defaultSettings: Settings = { searchEngine: 'google', homepage: 'skipy', developerMode: false, onboardingComplete: false, autoHibernateMinutes: 15 }
+const defaultSettings: Settings = { searchEngine: 'google', homepage: 'skipy', developerMode: false, onboardingComplete: false, autoHibernateMinutes: 15, autoCheckUpdates: true }
 let library: Library = { bookmarks: [], history: [], downloads: [], quickLinks: [], extensions: [], settings: { ...defaultSettings } }
 let filePath = ''
 let saveTimer: ReturnType<typeof setTimeout> | null = null
@@ -32,7 +32,7 @@ export function loadLibrary() {
         downloads: Array.isArray(record.downloads) ? record.downloads.filter(validDownload).map((entry: DownloadEntry) => ({ ...entry, status: entry.status === 'progressing' || entry.status === 'paused' ? 'interrupted' as const : entry.status })) : [],
         quickLinks: Array.isArray(record.quickLinks) ? record.quickLinks.filter(validQuickLink).slice(0, 6) : [],
         extensions: Array.isArray(record.extensions) ? record.extensions.filter(validExtension) : [],
-        settings: validSettings(record.settings) ? { ...defaultSettings, ...record.settings, developerMode: record.settings.developerMode === true, onboardingComplete: record.settings.onboardingComplete === true, autoHibernateMinutes: validHibernateMinutes(record.settings.autoHibernateMinutes) ? record.settings.autoHibernateMinutes : 15 } : { ...defaultSettings },
+        settings: validSettings(record.settings) ? { ...defaultSettings, ...record.settings, developerMode: record.settings.developerMode === true, onboardingComplete: record.settings.onboardingComplete === true, autoHibernateMinutes: validHibernateMinutes(record.settings.autoHibernateMinutes) ? record.settings.autoHibernateMinutes : 15, autoCheckUpdates: record.settings.autoCheckUpdates !== false } : { ...defaultSettings },
       }
     }
   } catch { /* A missing or damaged library starts empty. */ }

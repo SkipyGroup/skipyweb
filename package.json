@@ -1,6 +1,6 @@
 {
   "name": "skipy-browser",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "A small macOS desktop browser",
   "productName": "Skipy Browser",
@@ -10,12 +10,21 @@
     "start": "npm run build && electron .",
     "dist:win": "tsc -p tsconfig.main.json && tsc -p tsconfig.preload.json && vite build src/renderer --config vite.config.ts --outDir ../../dist --emptyOutDir --base ./ && electron-builder --win nsis --x64",
     "dist:mac": "tsc -p tsconfig.main.json && tsc -p tsconfig.preload.json && vite build src/renderer --config vite.config.ts --outDir ../../dist --emptyOutDir --base ./ && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dmg --x64 --arm64",
+    "dist:win:publish": "tsc -p tsconfig.main.json && tsc -p tsconfig.preload.json && vite build src/renderer --config vite.config.ts --outDir ../../dist --emptyOutDir --base ./ && electron-builder --win nsis --x64 --publish always",
+    "dist:mac:publish": "tsc -p tsconfig.main.json && tsc -p tsconfig.preload.json && vite build src/renderer --config vite.config.ts --outDir ../../dist --emptyOutDir --base ./ && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dmg --x64 --arm64 --publish always",
     "check": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.preload.json --noEmit && tsc -p tsconfig.renderer.json --noEmit"
   },
   "build": {
     "appId": "com.skipy.browser",
     "productName": "Skipy Browser",
     "asar": true,
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "SkipyGroup",
+        "repo": "skipyweb"
+      }
+    ],
     "directories": {
       "output": "release"
     },
@@ -62,6 +71,7 @@
     "electron@44.4.3": true
   },
   "dependencies": {
+    "electron-updater": "^6.8.9",
     "extract-zip": "^2.0.1",
     "lucide": "^1.47.0",
     "tldts": "^7.4.13"
