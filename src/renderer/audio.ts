@@ -40,7 +40,10 @@ window.skipyAudio.onStart(async (db, frequency, muted) => {
   const timeout = setTimeout(() => window.skipyAudio.status('error', 'A hangrögzítés nem indult el időben.'), 8000)
   await stop()
   try {
-    stream = await navigator.mediaDevices.getDisplayMedia({ audio: true, video: true })
+    stream = await navigator.mediaDevices.getDisplayMedia({
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      video: true,
+    })
     stream.getVideoTracks().forEach(track => track.stop())
     const track = stream.getAudioTracks()[0]
     if (!track) throw new Error('Nincs hangcsatorna a lapon.')

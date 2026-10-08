@@ -1602,7 +1602,6 @@ if (hasSingleInstanceLock) void app.whenReady().then(() => {
     if (!tab) return
     if (kind === 'active' && tab.view && !tab.view.webContents.isDestroyed()) {
       tab.bassStatus = 'active'
-      tab.view.webContents.setAudioMuted(false)
       tab.audioView?.webContents.send('audio:update', tab.bassDb, globalBassFrequency, tab.muted)
     } else if (kind === 'error') {
       stopBass(tab, true)

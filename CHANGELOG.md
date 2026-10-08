@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.2 — 2026-10-08
+
+- Bass capture no longer explicitly unmutes the original tab when processed playback becomes active, preserving local echo suppression.
+- Disabled capture echo cancellation, noise suppression, and automatic gain control for music playback.
+- Runtime sound quality still requires listening verification; no tests were run.
+
 ## 0.1.1 — 2026-10-08
 
 - Image downloads use the page session and report download failures.
